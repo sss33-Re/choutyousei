@@ -7,58 +7,83 @@ const C = {
   text: "#e8f4ff", muted: "#3a6a8a", mutedLight: "#5a8aaa",
 };
 
-const fmt = (d) => d.toISOString().slice(0, 16);
-const fmtDate = (d) => new Date(d).toLocaleDateString("ja-JP", { month: "short", day: "numeric", weekday: "short" });
-const fmtTime = (d) => new Date(d).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+// ─── Utilities ────────────────────────────────────────────────────
+const pad = n => String(n).padStart(2, "0");
+const localISO = (y, mo, d, h, mi) => `${y}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:00`;
+const parseLocal = s => new Date(typeof s === "string" && !s.includes("T") ? s + "T00:00:00" : s);
+const fmt = (d) => { const dt = d instanceof Date ? d : parseLocal(d); return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`; };
+const fmtDate = (d) => { const dt = d instanceof Date ? d : parseLocal(d); return dt.toLocaleDateString("ja-JP", { month: "short", day: "numeric", weekday: "short" }); };
+const fmtTime = (d) => { const dt = d instanceof Date ? d : parseLocal(d); return dt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }); };
 const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+const todayStr = () => { const n = new Date(); return localISO(n.getFullYear(), n.getMonth()+1, n.getDate(), n.getHours(), n.getMinutes()); };
 
 const DURATION_OPTIONS = [
-  { label: "30分", value: 30 }, { label: "1時間", value: 60 },
+  { label: "15分", value: 15 }, { label: "30分", value: 30 }, { label: "1時間", value: 60 },
   { label: "1時間30分", value: 90 }, { label: "2時間", value: 120 }, { label: "3時間", value: 180 },
 ];
 
-// ─── Storage（Claude.ai内はwindow.storage、外部はlocalStorage）────
+// ─── Storage ─────────────────────────────────────────────────────
 const KEY = (id) => `schedroom_${id}`;
-
 async function saveRoom(id, data) {
   const json = JSON.stringify(data);
-  // Try Claude artifact storage first (shared across users)
-  if (window.storage?.set) {
-    try { await window.storage.set(KEY(id), json, true); return true; } catch {}
-  }
-  // Fallback: localStorage (same device only)
+  if (window.storage?.set) { try { await window.storage.set(KEY(id), json, true); return true; } catch {} }
   try { localStorage.setItem(KEY(id), json); return true; } catch { return false; }
 }
-
 async function loadRoom(id) {
-  // Try Claude artifact storage first
-  if (window.storage?.get) {
-    try {
-      const r = await window.storage.get(KEY(id), true);
-      if (r) return JSON.parse(r.value);
-    } catch {}
-  }
-  // Fallback: localStorage
-  try {
-    const r = localStorage.getItem(KEY(id));
-    return r ? JSON.parse(r) : null;
-  } catch { return null; }
+  if (window.storage?.get) { try { const r = await window.storage.get(KEY(id), true); if (r) return JSON.parse(r.value); } catch {} }
+  try { const r = localStorage.getItem(KEY(id)); return r ? JSON.parse(r) : null; } catch { return null; }
 }
-
 function genRoomId() { return Math.random().toString(36).slice(2, 8).toUpperCase(); }
 
-// ─── Slot computation ─────────────────────────────────────────────
-function computeFreeSlots(events, startDate, endDate, durationMin) {
+// ─── Slot computation（15分刻み・時間帯フィルタ付き）─────────────
+function computeFreeSlots(events, startDate, endDate, durationMin, timeFrom, timeTo) {
+  // timeFrom/timeTo は "HH:MM" 形式（例 "09:00", "17:00"）、null なら制限なし
   const slots = [], dur = durationMin * 60 * 1000;
-  let cursor = new Date(startDate);
-  const end = new Date(endDate);
-  const busy = events.map(e => ({ s: new Date(e.start), e: new Date(e.end) })).sort((a, b) => a.s - b.s);
+  const step = 15 * 60 * 1000; // 15分刻み
+
+  // 開始を15分単位に揃える
+  let cursor = new Date(startDate instanceof Date ? startDate : parseLocal(startDate));
+  cursor = new Date(Math.ceil(cursor.getTime() / step) * step);
+  const end = new Date(endDate instanceof Date ? endDate : parseLocal(endDate));
+
+  const busy = events
+    .map(e => ({ s: parseLocal(e.start), e: parseLocal(e.end) }))
+    .sort((a, b) => a.s - b.s);
+
+  const [fromH, fromM] = timeFrom ? timeFrom.split(":").map(Number) : [0, 0];
+  const [toH, toM]     = timeTo   ? timeTo.split(":").map(Number)   : [23, 59];
+
   while (cursor < end) {
     const slotEnd = new Date(cursor.getTime() + dur);
     if (slotEnd > end) break;
+
+    // 時間帯フィルタ
+    const cH = cursor.getHours(), cM = cursor.getMinutes();
+    const eH = slotEnd.getHours(), eM = slotEnd.getMinutes();
+    const afterFrom = cH * 60 + cM >= fromH * 60 + fromM;
+    const beforeTo  = eH * 60 + eM <= toH  * 60 + toM;
+
+    if (timeFrom && timeTo && (!afterFrom || !beforeTo)) {
+      // 時間帯外 → 翌日のfromHへジャンプ
+      const next = new Date(cursor);
+      if (!afterFrom) {
+        next.setHours(fromH, fromM, 0, 0);
+      } else {
+        next.setDate(next.getDate() + 1);
+        next.setHours(fromH, fromM, 0, 0);
+      }
+      cursor = next;
+      continue;
+    }
+
     const conflict = busy.find(b => b.s < slotEnd && b.e > cursor);
-    if (conflict) cursor = new Date(conflict.e);
-    else { slots.push({ start: new Date(cursor), end: slotEnd }); cursor = slotEnd; }
+    if (conflict) {
+      // 衝突した予定の終了時刻を15分単位に切り上げてジャンプ
+      cursor = new Date(Math.ceil(conflict.e.getTime() / step) * step);
+    } else {
+      slots.push({ start: new Date(cursor), end: slotEnd });
+      cursor = new Date(cursor.getTime() + step); // 15分ずつずらして次の候補へ
+    }
   }
   return slots;
 }
@@ -79,28 +104,23 @@ function intersectSlots(allSlots) {
 }
 
 function makeGCalLink(title, start, end, desc = "") {
-  const f = d => d.toISOString().replace(/[-:]/g, "").replace(".000", "");
+  const f = d => (d instanceof Date ? d : parseLocal(d)).toISOString().replace(/[-:]/g, "").replace(".000", "");
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${f(start)}/${f(end)}&details=${encodeURIComponent(desc)}`;
 }
 
-// ─── Local parser（API不要・正規表現で解析）─────────────────────
+// ─── Parser ───────────────────────────────────────────────────────
 function parseScheduleText(text, startDate) {
-  const year = new Date(startDate).getFullYear();
+  const year = parseLocal(startDate).getFullYear();
   const events = [];
-  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
-  for (const line of lines) {
+  for (const line of text.split("\n").map(l => l.trim()).filter(Boolean)) {
     const m = line.match(/(\d{1,2})[\/月](\d{1,2})[日（\(]?[月火水木金土日]?[）\)]?\s*(\d{1,2}):(\d{2})[〜~\-–](\d{1,2}):(\d{2})\s*(.*)/);
     if (m) {
       const [, month, day, sh, sm, eh, em, title] = m;
-      const start = new Date(year, Number(month)-1, Number(day), Number(sh), Number(sm));
-      const end   = new Date(year, Number(month)-1, Number(day), Number(eh), Number(em));
-      if (!isNaN(start) && !isNaN(end)) {
-        events.push({
-          title: title.trim() || "予定",
-          start: start.toISOString().slice(0,19),
-          end:   end.toISOString().slice(0,19),
-        });
-      }
+      events.push({
+        title: title.trim() || "予定",
+        start: localISO(year, Number(month), Number(day), Number(sh), Number(sm)),
+        end:   localISO(year, Number(month), Number(day), Number(eh), Number(em)),
+      });
     }
   }
   return events;
@@ -137,7 +157,7 @@ export default function App() {
         }}
       />}
       {screen === "member" && <MemberScreen roomId={roomId} onBack={() => setScreen("top")} />}
-      {screen === "host" && <HostScreen roomId={roomId} onBack={() => setScreen("top")} />}
+      {screen === "host"   && <HostScreen   roomId={roomId} onBack={() => setScreen("top")} />}
       <GlobalStyle />
     </Page>
   );
@@ -154,12 +174,11 @@ function TopScreen({ onCreate, onJoin }) {
       <p style={{ margin: "0 0 40px", color: C.muted, fontSize: 13 }}>予定テキスト貼り付け → 全員の空き時間を自動算出</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <ModeBtn color={C.accent} emoji="✨" title="ルームを作成する" desc="主催者として部屋を作り、参加者にIDを共有する" onClick={onCreate} />
-        <ModeBtn color={C.gold} emoji="🔑" title="ルームに参加する" desc="主催者から届いたルームIDを入力して参加する" onClick={onJoin} />
+        <ModeBtn color={C.gold}   emoji="🔑" title="ルームに参加する" desc="主催者から届いたルームIDを入力して参加する"    onClick={onJoin}  />
       </div>
     </div>
   );
 }
-
 function ModeBtn({ color, emoji, title, desc, onClick }) {
   const [h, setH] = useState(false);
   return (
@@ -194,48 +213,50 @@ function JoinScreen({ value, onChange, onJoin, onBack }) {
 function MemberScreen({ roomId, onBack }) {
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
-  const [startDate, setStartDate] = useState(() => fmt(new Date()));
-  const [endDate, setEndDate] = useState(() => fmt(addDays(new Date(), 14)));
-  const [duration, setDuration] = useState(60);
+  const [roomData, setRoomData] = useState(null);
+  // 条件はルームから取得（主催者が設定したもの）
+  const [startDate, setStartDate] = useState(() => todayStr());
+  const [endDate,   setEndDate]   = useState(() => fmt(addDays(new Date(), 14)));
+  const [duration,  setDuration]  = useState(60);
+  const [timeFrom,  setTimeFrom]  = useState("");
+  const [timeTo,    setTimeTo]    = useState("");
   const [pastedText, setPastedText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  // freeSlots: array of {start, end, enabled}
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState(null);
   const [freeSlots, setFreeSlots] = useState([]);
-  const [copyState, setCopyState] = useState("idle"); // idle | copied | error
+  const [copyState, setCopyState] = useState("idle");
+
+  // ルームデータ読み込み（主催者設定の条件を反映）
+  useEffect(() => {
+    if (!roomId) return;
+    loadRoom(roomId).then(data => {
+      if (!data) return;
+      setRoomData(data);
+      if (data.startDate) setStartDate(data.startDate);
+      if (data.endDate)   setEndDate(data.endDate);
+      if (data.duration)  setDuration(data.duration);
+      if (data.timeFrom)  setTimeFrom(data.timeFrom);
+      if (data.timeTo)    setTimeTo(data.timeTo);
+    });
+  }, [roomId]);
 
   const prompt = makeCalendarPrompt(startDate, endDate);
 
-  // ── コピー機能（確実に動く方法）──
   const copyPrompt = useCallback(() => {
-    // Method 1: Clipboard API
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+    const doCopy = () => {
+      const ta = document.createElement("textarea");
+      ta.value = prompt; ta.style.cssText = "position:fixed;left:-9999px;top:-9999px";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      try { document.execCommand("copy"); setCopyState("copied"); }
+      catch { setCopyState("error"); }
+      document.body.removeChild(ta);
+      setTimeout(() => setCopyState("idle"), 2500);
+    };
+    if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(prompt)
         .then(() => { setCopyState("copied"); setTimeout(() => setCopyState("idle"), 2500); })
-        .catch(() => fallbackCopy());
-    } else {
-      fallbackCopy();
-    }
-  }, [prompt]);
-
-  const fallbackCopy = useCallback(() => {
-    // Method 2: textarea trick
-    const ta = document.createElement("textarea");
-    ta.value = prompt;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    ta.style.top = "-9999px";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    try {
-      const ok = document.execCommand("copy");
-      setCopyState(ok ? "copied" : "error");
-    } catch {
-      setCopyState("error");
-    }
-    document.body.removeChild(ta);
-    setTimeout(() => setCopyState("idle"), 2500);
+        .catch(doCopy);
+    } else doCopy();
   }, [prompt]);
 
   const analyze = () => {
@@ -243,18 +264,13 @@ function MemberScreen({ roomId, onBack }) {
     setError(null);
     try {
       const events = parseScheduleText(pastedText, startDate);
-      const slots = computeFreeSlots(events, new Date(startDate), new Date(endDate), duration);
-      // 全スロットをenabledで初期化
+      const slots = computeFreeSlots(events, startDate, endDate, duration, timeFrom || null, timeTo || null);
       setFreeSlots(slots.map(s => ({ start: s.start, end: s.end, enabled: true })));
       setStep(4);
-    } catch (e) {
-      setError("解析に失敗しました: " + e.message);
-    } finally { setLoading(false); }
+    } catch (e) { setError("解析に失敗しました: " + e.message); }
   };
 
-  const toggleSlot = (i) => {
-    setFreeSlots(prev => prev.map((s, idx) => idx === i ? { ...s, enabled: !s.enabled } : s));
-  };
+  const toggleSlot = (i) => setFreeSlots(prev => prev.map((s, idx) => idx === i ? { ...s, enabled: !s.enabled } : s));
 
   const submit = async () => {
     if (!name.trim()) { setError("名前を入力してください"); return; }
@@ -267,17 +283,19 @@ function MemberScreen({ roomId, onBack }) {
       const others = (room.submissions || []).filter(s => s.name !== name.trim());
       room.submissions = [...others, {
         name: name.trim(),
-        slots: enabled.map(s => ({ start: s.start.toISOString(), end: s.end.toISOString() })),
+        slots: enabled.map(s => ({ start: fmt(s.start), end: fmt(s.end) })),
         submittedAt: new Date().toISOString(),
       }];
       await saveRoom(roomId, room);
       setStep(5);
-    } catch (e) {
-      setError(e.message);
-    } finally { setLoading(false); }
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   const enabledCount = freeSlots.filter(s => s.enabled).length;
+
+  // 主催者が設定した条件の表示
+  const hasConditions = roomData && (roomData.timeFrom || roomData.timeTo || roomData.startDate);
 
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", padding: "24px 20px" }}>
@@ -297,7 +315,7 @@ function MemberScreen({ roomId, onBack }) {
               border: `2px solid ${step > s ? C.green : step === s ? C.accent : C.border}`,
               boxShadow: step === s ? `0 0 14px ${C.accent}88` : "none", transition: "all 0.3s",
             }}>{step > s ? "✓" : s}</div>
-            {i < 3 && <div style={{ width: 18, height: 2, background: step > s ? C.green : C.border, borderRadius: 1, transition: "background 0.3s" }} />}
+            {i < 3 && <div style={{ width: 18, height: 2, background: step > s ? C.green : C.border, borderRadius: 1 }} />}
           </div>
         ))}
         <span style={{ color: C.mutedLight, fontSize: 11, marginLeft: 8 }}>
@@ -305,75 +323,68 @@ function MemberScreen({ roomId, onBack }) {
         </span>
       </div>
 
-      {/* ── STEP 5: 完了 ── */}
+      {/* STEP 5: 完了 */}
       {step === 5 && (
         <Card style={{ textAlign: "center", padding: "40px 20px" }}>
           <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
           <p style={{ fontSize: 20, fontWeight: 900, color: C.green, margin: "0 0 8px" }}>送信完了！</p>
           <p style={{ color: C.mutedLight, fontSize: 13, margin: "0 0 4px" }}>{name} さんの空き時間</p>
           <p style={{ color: C.accent, fontWeight: 900, fontSize: 32, margin: 0 }}>{enabledCount}<span style={{ fontSize: 14, fontWeight: 400 }}>件</span></p>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 20, lineHeight: 1.7 }}>
-            主催者がルーム画面を更新すると<br />あなたの空き時間が反映されます
-          </p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 20, lineHeight: 1.7 }}>主催者がルーム画面を更新すると<br />あなたの空き時間が反映されます</p>
           <NBtn color={C.muted} onClick={onBack} full style={{ marginTop: 20, background: C.surfaceHigh, boxShadow: "none" }}>トップに戻る</NBtn>
         </Card>
       )}
 
-      {/* ── STEP 1: 設定 ── */}
+      {/* STEP 1: 設定 */}
       {step === 1 && (
         <Card>
+          {hasConditions && (
+            <div style={{ background: `${C.gold}11`, border: `1px solid ${C.gold}44`, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+              <p style={{ margin: "0 0 4px", fontSize: 11, color: C.gold, fontWeight: 700 }}>👑 主催者の設定条件</p>
+              <p style={{ margin: 0, fontSize: 12, color: C.mutedLight, lineHeight: 1.6 }}>
+                {roomData.startDate && `期間: ${fmtDate(roomData.startDate)} 〜 ${fmtDate(roomData.endDate)}`}
+                {roomData.timeFrom && `　時間帯: ${roomData.timeFrom} 〜 ${roomData.timeTo}`}
+              </p>
+            </div>
+          )}
           <FieldLabel>あなたの名前</FieldLabel>
           <input value={name} onChange={e => setName(e.target.value)} placeholder="例：田中 太郎" style={{ ...iSt, marginBottom: 14 }} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><FieldLabel>開始日時</FieldLabel><input type="datetime-local" value={startDate} onChange={e => setStartDate(e.target.value)} style={iSt} /></div>
-            <div><FieldLabel>終了日時</FieldLabel><input type="datetime-local" value={endDate} onChange={e => setEndDate(e.target.value)} style={iSt} /></div>
+            <div><FieldLabel>終了日時</FieldLabel><input type="datetime-local" value={endDate}   onChange={e => setEndDate(e.target.value)}   style={iSt} /></div>
           </div>
           <FieldLabel>必要な空き時間</FieldLabel>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
             {DURATION_OPTIONS.map(o => <DurChip key={o.value} label={o.label} active={duration === o.value} onClick={() => setDuration(o.value)} />)}
           </div>
+          {(timeFrom || timeTo) && (
+            <div style={{ background: `${C.accent}11`, border: `1px solid ${C.accent}33`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>
+              <p style={{ margin: 0, fontSize: 12, color: C.accent }}>🕐 時間帯フィルタ：{timeFrom} 〜 {timeTo} の枠のみ算出</p>
+            </div>
+          )}
           {error && <ErrBox msg={error} />}
-          <NBtn color={C.accent} onClick={() => { if (!name.trim()) { setError("名前を入力してください"); return; } setError(null); setStep(2); }} full style={{ marginTop: 16 }}>次へ →</NBtn>
+          <NBtn color={C.accent} onClick={() => { if (!name.trim()) { setError("名前を入力してください"); return; } setError(null); setStep(2); }} full style={{ marginTop: 14 }}>次へ →</NBtn>
         </Card>
       )}
 
-      {/* ── STEP 2: Claudeへ ── */}
+      {/* STEP 2: Claudeへ */}
       {step === 2 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card style={{ borderColor: `${C.purple}55` }}>
-            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: C.purple }}>
-              📋 Claudeのチャットで予定を取得する
-            </p>
+            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: C.purple }}>📋 Claudeのチャットで予定を取得する</p>
             <p style={{ color: C.mutedLight, fontSize: 13, lineHeight: 1.7, margin: "0 0 14px" }}>
               下のプロンプトをコピーして、<strong style={{ color: C.text }}>Claudeのチャット画面</strong>に貼り付けてください。
             </p>
-
-            {/* Prompt表示エリア */}
-            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.text, lineHeight: 1.7, userSelect: "all" }}>
-              {prompt}
-            </div>
-
-            {/* コピーボタン */}
-            <button
-              onClick={copyPrompt}
-              style={{
-                width: "100%", padding: "12px", borderRadius: 10, cursor: "pointer",
-                fontSize: 14, fontWeight: 800, transition: "all 0.2s", border: "2px solid",
-                background: copyState === "copied" ? `${C.green}22` : copyState === "error" ? `${C.accent2}22` : `${C.purple}22`,
-                borderColor: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
-                color: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
-                boxShadow: `0 0 16px ${copyState === "copied" ? C.green : C.purple}44`,
-              }}>
-              {copyState === "copied" ? "✓ コピーしました！" : copyState === "error" ? "⚠ 手動で選択してコピーしてください" : "📋 プロンプトをコピー"}
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.text, lineHeight: 1.7, userSelect: "all", whiteSpace: "pre-wrap" }}>{prompt}</div>
+            <button onClick={copyPrompt} style={{
+              width: "100%", padding: "12px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 800, transition: "all 0.2s", border: "2px solid",
+              background: copyState === "copied" ? `${C.green}22` : copyState === "error" ? `${C.accent2}22` : `${C.purple}22`,
+              borderColor: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
+              color: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
+            }}>
+              {copyState === "copied" ? "✓ コピーしました！" : copyState === "error" ? "⚠ 手動で長押しコピーしてください" : "📋 プロンプトをコピー"}
             </button>
-
-            {copyState === "error" && (
-              <p style={{ color: C.mutedLight, fontSize: 11, marginTop: 8, textAlign: "center" }}>
-                上のテキストを長押しして「すべて選択 → コピー」してください
-              </p>
-            )}
           </Card>
-
           <Card>
             <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: C.gold }}>手順</p>
             {["Claudeのチャット画面を新しく開く", "プロンプトを貼り付けて送信", "Claudeが返した予定一覧をコピー", "このアプリに戻って「次へ」を押す"].map((t, i) => (
@@ -383,35 +394,30 @@ function MemberScreen({ roomId, onBack }) {
               </div>
             ))}
           </Card>
-
           <NBtn color={C.accent} onClick={() => setStep(3)} full>Claudeから予定を取得したら次へ →</NBtn>
           <BackStep onClick={() => setStep(1)} />
         </div>
       )}
 
-      {/* ── STEP 3: 貼り付け ── */}
+      {/* STEP 3: 貼り付け */}
       {step === 3 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card>
-            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: C.accent }}>
-              📝 Claudeの返答を貼り付け
-            </p>
+            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: C.accent }}>📝 Claudeの返答を貼り付け</p>
             <p style={{ color: C.mutedLight, fontSize: 13, margin: "0 0 12px", lineHeight: 1.6 }}>
               ClaudeがGoogleカレンダーの予定を返答したテキストをそのまま貼り付けてください。
             </p>
             <textarea value={pastedText} onChange={e => setPastedText(e.target.value)}
-              placeholder={"例：\n6/5（木）10:00〜11:00 チームMTG\n6/6（金）14:00〜15:00 クライアント面談\n..."}
+              placeholder={"例：\n6/5（木）10:00〜11:00 チームMTG\n6/6（金）14:00〜15:00 クライアント面談"}
               rows={10} style={{ ...iSt, resize: "vertical", fontFamily: "monospace", fontSize: 12, lineHeight: 1.6 }} />
             {error && <ErrBox msg={error} />}
           </Card>
-          <NBtn color={C.accent} onClick={analyze} loading={loading} full>
-            {loading ? "⏳ 解析中…" : "🔍 空き時間を自動算出"}
-          </NBtn>
+          <NBtn color={C.accent} onClick={analyze} full>🔍 空き時間を自動算出</NBtn>
           <BackStep onClick={() => setStep(2)} />
         </div>
       )}
 
-      {/* ── STEP 4: 編集・送信 ── */}
+      {/* STEP 4: 編集・送信 */}
       {step === 4 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card>
@@ -420,10 +426,8 @@ function MemberScreen({ roomId, onBack }) {
               <span style={{ color: C.accent, fontWeight: 900, fontSize: 16 }}>{enabledCount}<span style={{ fontSize: 11, color: C.mutedLight, fontWeight: 400 }}>/{freeSlots.length}件</span></span>
             </div>
             <p style={{ color: C.mutedLight, fontSize: 12, margin: "0 0 14px", lineHeight: 1.6 }}>
-              ✅ = 送信する　❌ = 送信しない<br />参加できない日程はタップして外してください
+              タップして参加できない日程を外してください<br/>✅ 送信する　❌ 送信しない
             </p>
-
-            {/* 一括操作ボタン */}
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: true })))}
                 style={{ flex: 1, padding: "7px", background: `${C.green}18`, border: `1px solid ${C.green}44`, borderRadius: 8, color: C.green, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
@@ -434,7 +438,6 @@ function MemberScreen({ roomId, onBack }) {
                 すべて解除
               </button>
             </div>
-
             <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
               {freeSlots.map((slot, i) => (
                 <div key={i} onClick={() => toggleSlot(i)} style={{
@@ -453,12 +456,10 @@ function MemberScreen({ roomId, onBack }) {
               ))}
             </div>
           </Card>
-
           <Card>
             <FieldLabel>送信者名の確認</FieldLabel>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="名前" style={{ ...iSt, marginBottom: 4 }} />
           </Card>
-
           {error && <ErrBox msg={error} />}
           <NBtn color={C.green} onClick={submit} loading={loading} full style={{ color: C.bg }}>
             {loading ? "⏳ 送信中…" : `📤 ${enabledCount}件の空き時間を送信する`}
@@ -481,32 +482,64 @@ function HostScreen({ roomId, onBack }) {
   const [desc, setDesc] = useState("");
   const [copied, setCopied] = useState(false);
 
+  // 主催者が設定する条件
+  const [condStart,    setCondStart]    = useState(() => todayStr());
+  const [condEnd,      setCondEnd]      = useState(() => fmt(addDays(new Date(), 14)));
+  const [condDuration, setCondDuration] = useState(60);
+  const [condTimeFrom, setCondTimeFrom] = useState("");
+  const [condTimeTo,   setCondTimeTo]   = useState("");
+  const [condSaved,    setCondSaved]    = useState(false);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     const data = await loadRoom(roomId);
-    setRoom(data); setLoading(false);
+    setRoom(data);
+    if (data?.startDate)  setCondStart(data.startDate);
+    if (data?.endDate)    setCondEnd(data.endDate);
+    if (data?.duration)   setCondDuration(data.duration);
+    if (data?.timeFrom)   setCondTimeFrom(data.timeFrom);
+    if (data?.timeTo)     setCondTimeTo(data.timeTo);
+    if (data?.startDate)  setCondSaved(true);
+    setLoading(false);
   }, [roomId]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const saveConditions = async () => {
+    const data = await loadRoom(roomId);
+    if (!data) return;
+    Object.assign(data, { startDate: condStart, endDate: condEnd, duration: condDuration, timeFrom: condTimeFrom, timeTo: condTimeTo });
+    await saveRoom(roomId, data);
+    setRoom(data);
+    setCondSaved(true);
+    alert("条件を保存しました！参加者に共有してください。");
+  };
+
   const compute = () => {
     const subs = room?.submissions || [];
     if (subs.length < 2) return;
-    const allSlots = subs.map(s => s.slots.map(sl => ({ start: new Date(sl.start), end: new Date(sl.end) })));
-    setCommonSlots(intersectSlots(allSlots));
+    const tf = condTimeFrom || null, tt = condTimeTo || null;
+    const allSlots = subs.map(s => s.slots.map(sl => ({ start: parseLocal(sl.start), end: parseLocal(sl.end) })));
+    // 時間帯フィルタを共通スロットにも適用
+    let common = intersectSlots(allSlots);
+    if (tf && tt) {
+      const [fh, fm] = tf.split(":").map(Number);
+      const [th, tm] = tt.split(":").map(Number);
+      common = common.filter(s => {
+        const sh = s.start.getHours(), sm2 = s.start.getMinutes();
+        const eh = s.end.getHours(),   em2 = s.end.getMinutes();
+        return sh * 60 + sm2 >= fh * 60 + fm && eh * 60 + em2 <= th * 60 + tm;
+      });
+    }
+    setCommonSlots(common);
     setComputed(true); setSelected(null);
   };
 
   const shareText = `【スケジュール調整】\nルームID: ${roomId}\n\n参加手順：\n1. Claudeアプリでこのアプリを開く\n2.「ルームに参加する」をタップ\n3. ルームID「${roomId}」を入力\n4. 手順に従って空き時間を送信してください`;
 
-  const copyShare = async () => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(shareText).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); }).catch(fallbackShareCopy);
-    } else fallbackShareCopy();
-  };
-  const fallbackShareCopy = () => {
+  const copyShare = () => {
     const ta = document.createElement("textarea");
-    ta.value = shareText; ta.style.position = "fixed"; ta.style.left = "-9999px";
+    ta.value = shareText; ta.style.cssText = "position:fixed;left:-9999px";
     document.body.appendChild(ta); ta.focus(); ta.select();
     document.execCommand("copy"); document.body.removeChild(ta);
     setCopied(true); setTimeout(() => setCopied(false), 2500);
@@ -523,7 +556,30 @@ function HostScreen({ roomId, onBack }) {
         <RoomBadge id={roomId} />
       </div>
 
-      {/* Share */}
+      {/* 条件設定 */}
+      <Card style={{ borderColor: `${C.accent}44`, marginBottom: 14 }}>
+        <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 800, color: C.accent }}>⚙️ 募集条件を設定する</p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <div><FieldLabel>開始日時</FieldLabel><input type="datetime-local" value={condStart} onChange={e => setCondStart(e.target.value)} style={iSt} /></div>
+          <div><FieldLabel>終了日時</FieldLabel><input type="datetime-local" value={condEnd}   onChange={e => setCondEnd(e.target.value)}   style={iSt} /></div>
+        </div>
+        <FieldLabel>必要な時間</FieldLabel>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          {DURATION_OPTIONS.map(o => <DurChip key={o.value} label={o.label} active={condDuration === o.value} onClick={() => setCondDuration(o.value)} />)}
+        </div>
+        <FieldLabel>希望時間帯（任意）例: 09:00 〜 17:00</FieldLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 14 }}>
+          <input type="time" value={condTimeFrom} onChange={e => setCondTimeFrom(e.target.value)} style={iSt} placeholder="09:00" />
+          <span style={{ color: C.muted, textAlign: "center" }}>〜</span>
+          <input type="time" value={condTimeTo}   onChange={e => setCondTimeTo(e.target.value)}   style={iSt} placeholder="17:00" />
+        </div>
+        <NBtn color={C.accent} onClick={saveConditions} full>
+          💾 条件を保存して参加者に反映
+        </NBtn>
+        {condSaved && <p style={{ color: C.green, fontSize: 12, textAlign: "center", marginTop: 8 }}>✓ 保存済み・参加者の画面に反映されます</p>}
+      </Card>
+
+      {/* 共有 */}
       <Card style={{ borderColor: `${C.gold}44`, marginBottom: 14 }}>
         <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 800, color: C.gold }}>📤 参加者に共有する</p>
         <div style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -535,10 +591,9 @@ function HostScreen({ roomId, onBack }) {
             {copied ? "✓ コピー済" : "📋 共有文をコピー"}
           </button>
         </div>
-        <p style={{ margin: 0, fontSize: 11, color: C.muted, lineHeight: 1.7 }}>LINEなどでルームIDを共有。参加者はClaudeアプリでこのアプリを開き、手順に従って空き時間を送信します。</p>
       </Card>
 
-      {/* Submissions */}
+      {/* 送信済み一覧 */}
       <Card style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>
@@ -548,21 +603,20 @@ function HostScreen({ roomId, onBack }) {
             {loading ? "…" : "🔄 更新"}
           </button>
         </div>
-        {subs.length === 0 ? (
-          <p style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>まだ誰も送信していません</p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {subs.map((s, i) => (
-              <div key={i} style={{ background: C.bg, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>{s.name}</p>
-                  <p style={{ margin: 0, fontSize: 11, color: C.muted }}>空き時間 {s.slots.length}件</p>
+        {subs.length === 0
+          ? <p style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>まだ誰も送信していません</p>
+          : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {subs.map((s, i) => (
+                <div key={i} style={{ background: C.bg, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>{s.name}</p>
+                    <p style={{ margin: 0, fontSize: 11, color: C.muted }}>空き時間 {s.slots.length}件</p>
+                  </div>
+                  <span style={{ color: C.green, fontSize: 12, fontWeight: 600 }}>✓ 送信済み</span>
                 </div>
-                <span style={{ color: C.green, fontSize: 12, fontWeight: 600 }}>✓ 送信済み</span>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+        }
       </Card>
 
       {subs.length >= 2
@@ -570,7 +624,7 @@ function HostScreen({ roomId, onBack }) {
         : <p style={{ color: C.muted, fontSize: 12, textAlign: "center", marginBottom: 14 }}>2名以上の送信が必要です（現在 {subs.length}名）</p>
       }
 
-      {/* Common slots */}
+      {/* 共通スロット */}
       {computed && (
         <Card style={{ marginBottom: 14 }}>
           <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: commonSlots.length > 0 ? C.green : C.accent2 }}>
@@ -595,7 +649,7 @@ function HostScreen({ roomId, onBack }) {
         </Card>
       )}
 
-      {/* Event creation */}
+      {/* 予定作成 */}
       {selected && (
         <Card style={{ borderColor: `${C.accent}44` }}>
           <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: C.accent }}>📝 予定を作成</p>
