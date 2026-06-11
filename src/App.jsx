@@ -83,36 +83,31 @@ function makeGCalLink(title, start, end, desc = "") {
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${f(start)}/${f(end)}&details=${encodeURIComponent(desc)}`;
 }
 
-// ─── Claude API: parse schedule text ─────────────────────────────
-async function parseScheduleText(text, startDate, endDate) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
-      system: `あなたはスケジュール解析AIです。ユーザーが貼り付けたGoogleカレンダーの予定テキストを解析し、予定の一覧をJSONで返してください。
-出力形式: {"events": [{"title": "タイトル", "start": "2026-06-03T09:00:00", "end": "2026-06-03T10:00:00"}]}
-・日時はISO8601形式（タイムゾーンなし）
-・対象期間: ${startDate} 〜 ${endDate}
-・マークダウン不要、JSONのみ返すこと`,
-      messages: [{ role: "user", content: `以下の予定テキストを解析してください:\n\n${text}` }],
-    }),
-  });
-  const data = await res.json();
-  for (const block of (data.content || [])) {
-    if (block.type !== "text") continue;
-    try {
-      const clean = block.text.replace(/```json\n?|```\n?/g, "").trim();
-      const parsed = JSON.parse(clean);
-      if (Array.isArray(parsed.events)) return parsed.events;
-    } catch {}
+// ─── Local parser（API不要・正規表現で解析）─────────────────────
+function parseScheduleText(text, startDate) {
+  const year = new Date(startDate).getFullYear();
+  const events = [];
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    const m = line.match(/(\d{1,2})[\/月](\d{1,2})[日（\(]?[月火水木金土日]?[）\)]?\s*(\d{1,2}):(\d{2})[〜~\-–](\d{1,2}):(\d{2})\s*(.*)/);
+    if (m) {
+      const [, month, day, sh, sm, eh, em, title] = m;
+      const start = new Date(year, Number(month)-1, Number(day), Number(sh), Number(sm));
+      const end   = new Date(year, Number(month)-1, Number(day), Number(eh), Number(em));
+      if (!isNaN(start) && !isNaN(end)) {
+        events.push({
+          title: title.trim() || "予定",
+          start: start.toISOString().slice(0,19),
+          end:   end.toISOString().slice(0,19),
+        });
+      }
+    }
   }
-  return [];
+  return events;
 }
 
 function makeCalendarPrompt(startDate, endDate) {
-  return `私のGoogleカレンダーの予定を${startDate}から${endDate}まで全て教えてください。各予定のタイトル・開始時間・終了時間を一覧形式で出力してください。`;
+  return `私のGoogleカレンダーの予定を${startDate}から${endDate}まで全て教えてください。\n\n必ず以下の形式で1行ずつ出力してください（この形式以外は使わないでください）：\n月/日（曜日）HH:MM〜HH:MM タイトル\n\n出力例：\n6/5（木）10:00〜11:00 チームMTG\n6/6（金）14:00〜15:00 クライアント面談\n\n予定がない場合は「予定なし」とだけ出力してください。表形式や箇条書きは使わないでください。`;
 }
 
 // ─── App ──────────────────────────────────────────────────────────
@@ -243,11 +238,11 @@ function MemberScreen({ roomId, onBack }) {
     setTimeout(() => setCopyState("idle"), 2500);
   }, [prompt]);
 
-  const analyze = async () => {
+  const analyze = () => {
     if (!pastedText.trim()) { setError("予定テキストを貼り付けてください"); return; }
-    setLoading(true); setError(null);
+    setError(null);
     try {
-      const events = await parseScheduleText(pastedText, startDate, endDate);
+      const events = parseScheduleText(pastedText, startDate);
       const slots = computeFreeSlots(events, new Date(startDate), new Date(endDate), duration);
       // 全スロットをenabledで初期化
       setFreeSlots(slots.map(s => ({ start: s.start, end: s.end, enabled: true })));
