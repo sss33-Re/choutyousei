@@ -36,8 +36,9 @@ async function loadRoom(id) {
 function genRoomId() { return Math.random().toString(36).slice(2, 8).toUpperCase(); }
 
 // ─── Slot computation（15分刻み・時間帯フィルタ付き）─────────────
-function computeFreeSlots(events, startDate, endDate, durationMin, timeFrom, timeTo) {
+function computeFreeSlots(events, startDate, endDate, durationMin, timeFrom, timeTo, excludeDays = []) {
   // timeFrom/timeTo は "HH:MM" 形式（例 "09:00", "17:00"）、null なら制限なし
+  // excludeDays は曜日番号の配列（0=日, 1=月 ... 6=土）の除外リスト
   const slots = [], dur = durationMin * 60 * 1000;
   const step = 15 * 60 * 1000; // 15分刻み
 
@@ -54,6 +55,15 @@ function computeFreeSlots(events, startDate, endDate, durationMin, timeFrom, tim
   const [toH, toM]     = timeTo   ? timeTo.split(":").map(Number)   : [23, 59];
 
   while (cursor < end) {
+    // 除外曜日チェック
+    if (excludeDays.includes(cursor.getDay())) {
+      const next = new Date(cursor);
+      next.setDate(next.getDate() + 1);
+      next.setHours(0, 0, 0, 0);
+      cursor = next;
+      continue;
+    }
+
     const slotEnd = new Date(cursor.getTime() + dur);
     if (slotEnd > end) break;
 
@@ -135,6 +145,7 @@ export default function App() {
   const [screen, setScreen] = useState("top");
   const [roomId, setRoomId] = useState(null);
   const [joinInput, setJoinInput] = useState("");
+  const [manageInput, setManageInput] = useState("");
 
   return (
     <Page>
@@ -145,8 +156,10 @@ export default function App() {
           setRoomId(id); setScreen("host");
         }}
         onJoin={() => setScreen("join")}
+        onManage={() => setScreen("manage")}
       />}
       {screen === "join" && <JoinScreen
+        title="🔑 ルームに参加" color={C.gold} buttonLabel="参加する →"
         value={joinInput} onChange={setJoinInput}
         onBack={() => setScreen("top")}
         onJoin={async () => {
@@ -154,6 +167,17 @@ export default function App() {
           const data = await loadRoom(id);
           if (!data) { alert("ルームが見つかりません。IDを確認してください。"); return; }
           setRoomId(id); setScreen("member");
+        }}
+      />}
+      {screen === "manage" && <JoinScreen
+        title="👑 主催者として再開" color={C.accent} buttonLabel="このルームを開く →"
+        value={manageInput} onChange={setManageInput}
+        onBack={() => setScreen("top")}
+        onJoin={async () => {
+          const id = manageInput.trim().toUpperCase();
+          const data = await loadRoom(id);
+          if (!data) { alert("ルームが見つかりません。IDを確認してください。"); return; }
+          setRoomId(id); setScreen("host");
         }}
       />}
       {screen === "member" && <MemberScreen roomId={roomId} onBack={() => setScreen("top")} />}
@@ -164,7 +188,7 @@ export default function App() {
 }
 
 // ─── TOP ─────────────────────────────────────────────────────────
-function TopScreen({ onCreate, onJoin }) {
+function TopScreen({ onCreate, onJoin, onManage }) {
   return (
     <div style={{ maxWidth: 440, margin: "0 auto", padding: "48px 20px 32px", textAlign: "center" }}>
       <div style={{ fontSize: 48, marginBottom: 16 }}>📅</div>
@@ -175,6 +199,12 @@ function TopScreen({ onCreate, onJoin }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <ModeBtn color={C.accent} emoji="✨" title="ルームを作成する" desc="主催者として部屋を作り、参加者にIDを共有する" onClick={onCreate} />
         <ModeBtn color={C.gold}   emoji="🔑" title="ルームに参加する" desc="主催者から届いたルームIDを入力して参加する"    onClick={onJoin}  />
+        <button onClick={onManage} style={{
+          background: "none", border: "none", color: C.muted, cursor: "pointer",
+          fontSize: 12, marginTop: 4, textDecoration: "underline", textDecorationColor: C.border,
+        }}>
+          すでに作成したルームの主催者ビューに戻る →
+        </button>
       </div>
     </div>
   );
@@ -193,17 +223,17 @@ function ModeBtn({ color, emoji, title, desc, onClick }) {
   );
 }
 
-// ─── JOIN ─────────────────────────────────────────────────────────
-function JoinScreen({ value, onChange, onJoin, onBack }) {
+// ─── JOIN / MANAGE（共通コンポーネント）────────────────────────────
+function JoinScreen({ value, onChange, onJoin, onBack, title = "🔑 ルームに参加", color = C.gold, buttonLabel = "参加する →" }) {
   return (
     <div style={{ maxWidth: 420, margin: "0 auto", padding: "24px 20px" }}>
       <BackBtn onClick={onBack} />
-      <SecTitle color={C.gold}>🔑 ルームに参加</SecTitle>
+      <SecTitle color={color}>{title}</SecTitle>
       <Card>
         <FieldLabel>ルームID（6文字）</FieldLabel>
         <input value={value} onChange={e => onChange(e.target.value.toUpperCase())} placeholder="例：AB12CD" maxLength={6}
           style={{ ...iSt, textAlign: "center", fontSize: 24, letterSpacing: "8px", fontWeight: 900, marginBottom: 14 }} />
-        <NBtn color={C.gold} onClick={onJoin} full>参加する →</NBtn>
+        <NBtn color={color} onClick={onJoin} full>{buttonLabel}</NBtn>
       </Card>
     </div>
   );
@@ -220,6 +250,7 @@ function MemberScreen({ roomId, onBack }) {
   const [duration,  setDuration]  = useState(60);
   const [timeFrom,  setTimeFrom]  = useState("");
   const [timeTo,    setTimeTo]    = useState("");
+  const [excludeDays, setExcludeDays] = useState([]);
   const [pastedText, setPastedText] = useState("");
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState(null);
@@ -237,6 +268,7 @@ function MemberScreen({ roomId, onBack }) {
       if (data.duration)  setDuration(data.duration);
       if (data.timeFrom)  setTimeFrom(data.timeFrom);
       if (data.timeTo)    setTimeTo(data.timeTo);
+      if (data.excludeDays) setExcludeDays(data.excludeDays);
     });
   }, [roomId]);
 
@@ -259,12 +291,15 @@ function MemberScreen({ roomId, onBack }) {
     } else doCopy();
   }, [prompt]);
 
+  const [busyEvents, setBusyEvents] = useState([]);
+
   const analyze = () => {
     if (!pastedText.trim()) { setError("予定テキストを貼り付けてください"); return; }
     setError(null);
     try {
       const events = parseScheduleText(pastedText, startDate);
-      const slots = computeFreeSlots(events, startDate, endDate, duration, timeFrom || null, timeTo || null);
+      const slots = computeFreeSlots(events, startDate, endDate, duration, timeFrom || null, timeTo || null, excludeDays);
+      setBusyEvents(events);
       setFreeSlots(slots.map(s => ({ start: s.start, end: s.end, enabled: true })));
       setStep(4);
     } catch (e) { setError("解析に失敗しました: " + e.message); }
@@ -344,6 +379,7 @@ function MemberScreen({ roomId, onBack }) {
               <p style={{ margin: 0, fontSize: 12, color: C.mutedLight, lineHeight: 1.6 }}>
                 {roomData.startDate && `期間: ${fmtDate(roomData.startDate)} 〜 ${fmtDate(roomData.endDate)}`}
                 {roomData.timeFrom && `　時間帯: ${roomData.timeFrom} 〜 ${roomData.timeTo}`}
+                {roomData.excludeDays?.length > 0 && `　対象外: ${roomData.excludeDays.map(d => ["日","月","火","水","木","金","土"][d]).join("・")}曜`}
               </p>
             </div>
           )}
@@ -417,7 +453,7 @@ function MemberScreen({ roomId, onBack }) {
         </div>
       )}
 
-      {/* STEP 4: 編集・送信 */}
+      {/* STEP 4: 編集・送信（カレンダー風グリッド表示） */}
       {step === 4 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card>
@@ -426,9 +462,10 @@ function MemberScreen({ roomId, onBack }) {
               <span style={{ color: C.accent, fontWeight: 900, fontSize: 16 }}>{enabledCount}<span style={{ fontSize: 11, color: C.mutedLight, fontWeight: 400 }}>/{freeSlots.length}件</span></span>
             </div>
             <p style={{ color: C.mutedLight, fontSize: 12, margin: "0 0 14px", lineHeight: 1.6 }}>
-              タップして参加できない日程を外してください<br/>✅ 送信する　❌ 送信しない
+              <span style={{ color: C.green }}>■</span>空き（タップで送信対象から外せます）　
+              <span style={{ color: C.muted }}>■</span>予定あり／対象外
             </p>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: true })))}
                 style={{ flex: 1, padding: "7px", background: `${C.green}18`, border: `1px solid ${C.green}44`, borderRadius: 8, color: C.green, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
                 すべて選択
@@ -438,23 +475,16 @@ function MemberScreen({ roomId, onBack }) {
                 すべて解除
               </button>
             </div>
-            <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-              {freeSlots.map((slot, i) => (
-                <div key={i} onClick={() => toggleSlot(i)} style={{
-                  padding: "11px 14px", borderRadius: 10, cursor: "pointer",
-                  background: slot.enabled ? `${C.green}12` : `${C.accent2}0a`,
-                  border: `1.5px solid ${slot.enabled ? C.green + "66" : C.accent2 + "44"}`,
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  transition: "all 0.15s", opacity: slot.enabled ? 1 : 0.5,
-                }}>
-                  <div>
-                    <p style={{ margin: 0, fontSize: 13, color: slot.enabled ? C.text : C.mutedLight, fontWeight: 600 }}>{fmtDate(slot.start)}</p>
-                    <p style={{ margin: 0, fontSize: 12, color: slot.enabled ? C.mutedLight : C.muted }}>{fmtTime(slot.start)} 〜 {fmtTime(slot.end)}</p>
-                  </div>
-                  <span style={{ fontSize: 18 }}>{slot.enabled ? "✅" : "❌"}</span>
-                </div>
-              ))}
-            </div>
+
+            <DayTimelineGrid
+              freeSlots={freeSlots}
+              busyEvents={busyEvents}
+              startDate={startDate}
+              endDate={endDate}
+              timeFrom={timeFrom}
+              timeTo={timeTo}
+              onToggleSlot={toggleSlot}
+            />
           </Card>
           <Card>
             <FieldLabel>送信者名の確認</FieldLabel>
@@ -488,6 +518,7 @@ function HostScreen({ roomId, onBack }) {
   const [condDuration, setCondDuration] = useState(60);
   const [condTimeFrom, setCondTimeFrom] = useState("");
   const [condTimeTo,   setCondTimeTo]   = useState("");
+  const [condExcludeDays, setCondExcludeDays] = useState([]); // [0,6] = 日・土を除外
   const [condSaved,    setCondSaved]    = useState(false);
 
   const refresh = useCallback(async () => {
@@ -499,16 +530,21 @@ function HostScreen({ roomId, onBack }) {
     if (data?.duration)   setCondDuration(data.duration);
     if (data?.timeFrom)   setCondTimeFrom(data.timeFrom);
     if (data?.timeTo)     setCondTimeTo(data.timeTo);
+    if (data?.excludeDays) setCondExcludeDays(data.excludeDays);
     if (data?.startDate)  setCondSaved(true);
     setLoading(false);
   }, [roomId]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const toggleExcludeDay = (d) => {
+    setCondExcludeDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  };
+
   const saveConditions = async () => {
     const data = await loadRoom(roomId);
     if (!data) return;
-    Object.assign(data, { startDate: condStart, endDate: condEnd, duration: condDuration, timeFrom: condTimeFrom, timeTo: condTimeTo });
+    Object.assign(data, { startDate: condStart, endDate: condEnd, duration: condDuration, timeFrom: condTimeFrom, timeTo: condTimeTo, excludeDays: condExcludeDays });
     await saveRoom(roomId, data);
     setRoom(data);
     setCondSaved(true);
@@ -520,7 +556,7 @@ function HostScreen({ roomId, onBack }) {
     if (subs.length < 2) return;
     const tf = condTimeFrom || null, tt = condTimeTo || null;
     const allSlots = subs.map(s => s.slots.map(sl => ({ start: parseLocal(sl.start), end: parseLocal(sl.end) })));
-    // 時間帯フィルタを共通スロットにも適用
+    // 時間帯・曜日フィルタを共通スロットにも適用
     let common = intersectSlots(allSlots);
     if (tf && tt) {
       const [fh, fm] = tf.split(":").map(Number);
@@ -530,6 +566,9 @@ function HostScreen({ roomId, onBack }) {
         const eh = s.end.getHours(),   em2 = s.end.getMinutes();
         return sh * 60 + sm2 >= fh * 60 + fm && eh * 60 + em2 <= th * 60 + tm;
       });
+    }
+    if (condExcludeDays.length) {
+      common = common.filter(s => !condExcludeDays.includes(s.start.getDay()));
     }
     setCommonSlots(common);
     setComputed(true); setSelected(null);
@@ -573,6 +612,24 @@ function HostScreen({ roomId, onBack }) {
           <span style={{ color: C.muted, textAlign: "center" }}>〜</span>
           <input type="time" value={condTimeTo}   onChange={e => setCondTimeTo(e.target.value)}   style={iSt} placeholder="17:00" />
         </div>
+        <FieldLabel>対象外の曜日（任意）</FieldLabel>
+        <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+          {["日","月","火","水","木","金","土"].map((d, i) => {
+            const active = condExcludeDays.includes(i);
+            return (
+              <button key={i} onClick={() => toggleExcludeDay(i)} style={{
+                flex: 1, padding: "9px 0", borderRadius: 8, cursor: "pointer",
+                border: `1.5px solid ${active ? C.accent2 : C.border}`,
+                background: active ? `${C.accent2}22` : C.surfaceHigh,
+                color: active ? C.accent2 : i===0 ? C.accent2 : i===6 ? C.accent : C.mutedLight,
+                fontSize: 12, fontWeight: active ? 800 : 500,
+                textDecoration: active ? "line-through" : "none",
+                transition: "all 0.15s",
+              }}>{d}</button>
+            );
+          })}
+        </div>
+        <p style={{ color: C.muted, fontSize: 11, margin: "6px 0 14px" }}>タップした曜日は候補から除外されます</p>
         <NBtn color={C.accent} onClick={saveConditions} full>
           💾 条件を保存して参加者に反映
         </NBtn>
@@ -852,3 +909,127 @@ const navBtnSt = {
   color: C.text, cursor: "pointer", fontSize: 18, width: 32, height: 32,
   display: "flex", alignItems: "center", justifyContent: "center",
 };
+
+// ─── Day Timeline Grid（Googleカレンダー風の日別タイムライン）─────
+// freeSlots: 選択可能な空きスロット配列 {start, end, enabled}
+// busyEvents: 解析された予定 [{title, start, end}]（ISO文字列）
+function DayTimelineGrid({ freeSlots, busyEvents, startDate, endDate, timeFrom, timeTo, onToggleSlot }) {
+  // 日付ごとにグループ化
+  const start = parseLocal(startDate);
+  const end = parseLocal(endDate);
+  const days = [];
+  let cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const lastDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  while (cur <= lastDay) { days.push(new Date(cur)); cur = addDays(cur, 1); }
+
+  const [openDay, setOpenDay] = useState(0);
+
+  // 表示する時間範囲（時間帯指定があればそれ、なければ終日0-24時）
+  const [dispFromH] = timeFrom ? timeFrom.split(":").map(Number) : [0];
+  const [dispToH]   = timeTo   ? timeTo.split(":").map(Number)   : [24];
+  const hourRange = [];
+  for (let h = dispFromH; h < (timeTo ? dispToH : 24); h++) hourRange.push(h);
+  const totalMinutes = (hourRange.length || 1) * 60;
+
+  // busyEventsとfreeSlotsを日付ごとに振り分け
+  const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+
+  const busyByDay = {};
+  for (const e of busyEvents) {
+    const s = parseLocal(e.start);
+    const k = dayKey(s);
+    (busyByDay[k] ||= []).push({ start: s, end: parseLocal(e.end), title: e.title });
+  }
+
+  const freeByDay = {};
+  freeSlots.forEach((slot, idx) => {
+    const k = dayKey(slot.start instanceof Date ? slot.start : parseLocal(slot.start));
+    (freeByDay[k] ||= []).push({ ...slot, idx });
+  });
+
+  // 1分 = 何%か
+  const pctOf = (date) => {
+    const minsFromStart = (date.getHours() - dispFromH) * 60 + date.getMinutes();
+    return Math.max(0, Math.min(100, (minsFromStart / totalMinutes) * 100));
+  };
+
+  const daysWithData = days.filter(d => (freeByDay[dayKey(d)]?.length || busyByDay[dayKey(d)]?.length));
+
+  return (
+    <div>
+      {/* 時刻目盛り */}
+      <div style={{ display: "flex", fontSize: 9, color: C.muted, marginBottom: 4, paddingLeft: 78 }}>
+        {hourRange.filter((_, i) => i % 3 === 0).map(h => (
+          <div key={h} style={{ flex: 3, textAlign: "left" }}>{h}時</div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" }}>
+        {daysWithData.length === 0 && (
+          <p style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>該当する日程がありません</p>
+        )}
+        {daysWithData.map(d => {
+          const k = dayKey(d);
+          const dow = d.getDay();
+          const free = freeByDay[k] || [];
+          const busy = busyByDay[k] || [];
+          const label = `${d.getMonth()+1}/${d.getDate()}(${["日","月","火","水","木","金","土"][dow]})`;
+          const enabledHere = free.filter(s => s.enabled).length;
+
+          return (
+            <div key={k} style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
+              {/* 日付ラベル */}
+              <div style={{ width: 70, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: dow===0 ? C.accent2 : dow===6 ? C.accent : C.text }}>{label}</span>
+                <span style={{ fontSize: 10, color: enabledHere ? C.green : C.muted }}>{enabledHere>0 ? `空${enabledHere}` : "空きなし"}</span>
+              </div>
+
+              {/* タイムラインバー */}
+              <div style={{ position: "relative", flex: 1, height: 34, background: C.bg, borderRadius: 6, overflow: "hidden", border: `1px solid ${C.border}` }}>
+                {/* 1時間ごとの薄い区切り線 */}
+                {hourRange.map((h, i) => (
+                  <div key={h} style={{ position: "absolute", left: `${(i/hourRange.length)*100}%`, top: 0, bottom: 0, width: 1, background: C.border, opacity: i%3===0?0.6:0.25 }} />
+                ))}
+
+                {/* busy（予定あり）＝灰色 */}
+                {busy.map((b, i) => {
+                  const left = pctOf(b.start), right = pctOf(b.end);
+                  if (right <= left) return null;
+                  return (
+                    <div key={"b"+i} title={b.title} style={{
+                      position: "absolute", left: `${left}%`, width: `${right-left}%`, top: 2, bottom: 2,
+                      background: "#3a3f4a", borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                    }}>
+                      <span style={{ fontSize: 8, color: "#8a8f9a", whiteSpace: "nowrap", padding: "0 2px" }}>{b.title}</span>
+                    </div>
+                  );
+                })}
+
+                {/* free（空き）＝緑 or グレー（解除済み） */}
+                {free.map((s) => {
+                  const sd = s.start instanceof Date ? s.start : parseLocal(s.start);
+                  const ed = s.end instanceof Date ? s.end : parseLocal(s.end);
+                  const left = pctOf(sd), right = pctOf(ed);
+                  if (right <= left) return null;
+                  return (
+                    <div key={s.idx} onClick={() => onToggleSlot(s.idx)} title={`${fmtTime(sd)}〜${fmtTime(ed)}`} style={{
+                      position: "absolute", left: `${left}%`, width: `${Math.max(right-left,0.6)}%`, top: 2, bottom: 2,
+                      background: s.enabled ? `${C.green}99` : "#2a3038",
+                      border: s.enabled ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                      borderRadius: 3, cursor: "pointer", transition: "all 0.15s",
+                      boxShadow: s.enabled ? `0 0 4px ${C.green}66` : "none",
+                    }} />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <p style={{ color: C.muted, fontSize: 10, marginTop: 10, textAlign: "center" }}>
+        バーをタップで空き時間の選択 / 解除ができます
+      </p>
+    </div>
+  );
+}
