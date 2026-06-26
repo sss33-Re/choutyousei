@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 
 const C = {
   bg: "#040d1c", surface: "#080f1e", surfaceHigh: "#0d1a30",
-  border: "#152a45", accent: "#00e5ff", accent2: "#ff4d6d",
+  border: "#2a4a6e", accent: "#00e5ff", accent2: "#ff4d6d",
   gold: "#ffd166", green: "#06ffa5", purple: "#b48eff",
-  text: "#e8f4ff", muted: "#3a6a8a", mutedLight: "#5a8aaa",
+  text: "#e8f4ff", muted: "#4a7fa3", mutedLight: "#7aa8c8",
 };
 
 // ─── Utilities ────────────────────────────────────────────────────
@@ -200,10 +200,11 @@ function TopScreen({ onCreate, onJoin, onManage }) {
         <ModeBtn color={C.accent} emoji="✨" title="ルームを作成する" desc="主催者として部屋を作り、参加者にIDを共有する" onClick={onCreate} />
         <ModeBtn color={C.gold}   emoji="🔑" title="ルームに参加する" desc="主催者から届いたルームIDを入力して参加する"    onClick={onJoin}  />
         <button onClick={onManage} style={{
-          background: "none", border: "none", color: C.muted, cursor: "pointer",
-          fontSize: 12, marginTop: 4, textDecoration: "underline", textDecorationColor: C.border,
+          background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.mutedLight,
+          cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 6,
+          padding: "10px 16px", borderRadius: 10, transition: "all 0.2s",
         }}>
-          すでに作成したルームの主催者ビューに戻る →
+          🔁 すでに作成したルームの主催者ビューに戻る
         </button>
       </div>
     </div>
@@ -749,10 +750,24 @@ function NBtn({ children, color, onClick, loading, full, style = {} }) {
   );
 }
 function BackBtn({ onClick }) {
-  return <button onClick={onClick} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: "0 0 16px", display: "flex", alignItems: "center", gap: 4 }}>← 戻る</button>;
+  return (
+    <button onClick={onClick} style={{
+      background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.mutedLight,
+      cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "8px 14px",
+      borderRadius: 8, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
+      transition: "all 0.2s",
+    }}>← 戻る</button>
+  );
 }
 function BackStep({ onClick }) {
-  return <button onClick={onClick} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, padding: "4px 0", display: "block" }}>← 前のステップへ</button>;
+  return (
+    <button onClick={onClick} style={{
+      background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.mutedLight,
+      cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "8px 14px",
+      borderRadius: 8, display: "inline-flex", alignItems: "center", gap: 6,
+      transition: "all 0.2s",
+    }}>← 前のステップへ</button>
+  );
 }
 function SecTitle({ children, color }) {
   return <h2 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: C.text, borderLeft: `3px solid ${color}`, paddingLeft: 10, fontFamily: "monospace" }}>{children}</h2>;
