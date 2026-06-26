@@ -350,8 +350,8 @@ function MemberScreen({ roomId, onBack }) {
           <FieldLabel>あなたの名前</FieldLabel>
           <input value={name} onChange={e => setName(e.target.value)} placeholder="例：田中 太郎" style={{ ...iSt, marginBottom: 14 }} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-            <div><FieldLabel>開始日時</FieldLabel><input type="datetime-local" value={startDate} onChange={e => setStartDate(e.target.value)} style={iSt} /></div>
-            <div><FieldLabel>終了日時</FieldLabel><input type="datetime-local" value={endDate}   onChange={e => setEndDate(e.target.value)}   style={iSt} /></div>
+            <CalendarPicker label="開始日時" value={startDate} onChange={setStartDate} />
+            <CalendarPicker label="終了日時" value={endDate} onChange={setEndDate} />
           </div>
           <FieldLabel>必要な空き時間</FieldLabel>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -559,9 +559,9 @@ function HostScreen({ roomId, onBack }) {
       {/* 条件設定 */}
       <Card style={{ borderColor: `${C.accent}44`, marginBottom: 14 }}>
         <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 800, color: C.accent }}>⚙️ 募集条件を設定する</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-          <div><FieldLabel>開始日時</FieldLabel><input type="datetime-local" value={condStart} onChange={e => setCondStart(e.target.value)} style={iSt} /></div>
-          <div><FieldLabel>終了日時</FieldLabel><input type="datetime-local" value={condEnd}   onChange={e => setCondEnd(e.target.value)}   style={iSt} /></div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+          <CalendarPicker label="開始日時" value={condStart} onChange={setCondStart} />
+          <CalendarPicker label="終了日時" value={condEnd} onChange={setCondEnd} />
         </div>
         <FieldLabel>必要な時間</FieldLabel>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -726,3 +726,129 @@ function GlobalStyle() {
     ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 4px; }
   `}</style>;
 }
+
+// ─── Calendar Picker Component ────────────────────────────────────
+// value: "YYYY-MM-DDTHH:MM" 形式, onChange: 同形式で返す
+function CalendarPicker({ value, onChange, label }) {
+  const [open, setOpen] = useState(false);
+  const parsed = value ? parseLocal(value) : new Date();
+  const [viewYear,  setViewYear]  = useState(parsed.getFullYear());
+  const [viewMonth, setViewMonth] = useState(parsed.getMonth()); // 0-indexed
+  const [selDate,   setSelDate]   = useState(value ? value.slice(0,10) : "");
+  const [selHour,   setSelHour]   = useState(parsed.getHours());
+  const [selMin,    setSelMin]    = useState(Math.floor(parsed.getMinutes()/15)*15);
+
+  const DAYS = ["日","月","火","水","木","金","土"];
+  const MONTHS = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const selectDay = (d) => {
+    const dateStr = `${viewYear}-${pad(viewMonth+1)}-${pad(d)}`;
+    setSelDate(dateStr);
+    const result = `${dateStr}T${pad(selHour)}:${pad(selMin)}`;
+    onChange(result);
+  };
+
+  const applyTime = (h, m) => {
+    if (!selDate) return;
+    const result = `${selDate}T${pad(h)}:${pad(m)}`;
+    onChange(result);
+  };
+
+  const displayVal = value
+    ? `${parseLocal(value).toLocaleDateString("ja-JP",{month:"short",day:"numeric",weekday:"short"})} ${pad(selHour)}:${pad(selMin)}`
+    : "日付を選択";
+
+  return (
+    <div style={{ position: "relative" }}>
+      {label && <FieldLabel>{label}</FieldLabel>}
+      <button onClick={() => setOpen(o => !o)} style={{
+        width: "100%", padding: "10px 12px", borderRadius: 8, textAlign: "left",
+        background: C.surfaceHigh, border: `1.5px solid ${open ? C.accent : C.border}`,
+        color: value ? C.text : C.muted, fontSize: 14, cursor: "pointer",
+        boxShadow: open ? `0 0 10px ${C.accent}44` : "none", transition: "all 0.2s",
+      }}>
+        📅 {displayVal}
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 100,
+          background: C.surface, border: `1.5px solid ${C.accent}55`, borderRadius: 14,
+          padding: 14, boxShadow: `0 8px 32px ${C.accent}22`,
+        }}>
+          {/* Month navigation */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <button onClick={() => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y=>y-1); } else setViewMonth(m=>m-1); }}
+              style={navBtnSt}>‹</button>
+            <span style={{ color: C.text, fontWeight: 800, fontSize: 14 }}>{viewYear}年 {MONTHS[viewMonth]}</span>
+            <button onClick={() => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y=>y+1); } else setViewMonth(m=>m+1); }}
+              style={navBtnSt}>›</button>
+          </div>
+
+          {/* Day headers */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 4 }}>
+            {DAYS.map((d,i) => (
+              <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: i===0?C.accent2:i===6?C.accent:C.muted, padding: "2px 0" }}>{d}</div>
+            ))}
+          </div>
+
+          {/* Date cells */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 12 }}>
+            {cells.map((d, i) => {
+              if (!d) return <div key={i} />;
+              const dateStr = `${viewYear}-${pad(viewMonth+1)}-${pad(d)}`;
+              const isSelected = selDate === dateStr;
+              const isToday = dateStr === new Date().toISOString().slice(0,10);
+              const dow = (firstDay + d - 1) % 7;
+              return (
+                <button key={i} onClick={() => selectDay(d)} style={{
+                  padding: "6px 2px", borderRadius: 6, border: isSelected ? `1.5px solid ${C.gold}` : "1.5px solid transparent",
+                  background: isSelected ? `${C.gold}33` : isToday ? `${C.accent}15` : "transparent",
+                  color: isSelected ? C.gold : dow===0 ? C.accent2 : dow===6 ? C.accent : C.text,
+                  cursor: "pointer", fontSize: 12, fontWeight: isSelected ? 800 : 400,
+                  boxShadow: isSelected ? `0 0 8px ${C.gold}44` : "none",
+                }}>
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Time picker */}
+          <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+            <p style={{ margin: "0 0 8px", fontSize: 10, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>時刻</p>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <select value={selHour} onChange={e => { const h = Number(e.target.value); setSelHour(h); applyTime(h, selMin); }}
+                style={{ ...iSt, flex: 1, padding: "8px" }}>
+                {Array.from({length:24},(_,i)=>i).map(h => <option key={h} value={h}>{pad(h)}時</option>)}
+              </select>
+              <span style={{ color: C.muted }}>:</span>
+              <select value={selMin} onChange={e => { const m = Number(e.target.value); setSelMin(m); applyTime(selHour, m); }}
+                style={{ ...iSt, flex: 1, padding: "8px" }}>
+                {[0,15,30,45].map(m => <option key={m} value={m}>{pad(m)}分</option>)}
+              </select>
+            </div>
+          </div>
+
+          <button onClick={() => setOpen(false)} style={{
+            width: "100%", marginTop: 12, padding: "10px", borderRadius: 8,
+            background: C.accent, border: "none", color: C.bg,
+            fontWeight: 800, cursor: "pointer", fontSize: 13,
+          }}>✓ 決定</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const navBtnSt = {
+  background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6,
+  color: C.text, cursor: "pointer", fontSize: 18, width: 32, height: 32,
+  display: "flex", alignItems: "center", justifyContent: "center",
+};
