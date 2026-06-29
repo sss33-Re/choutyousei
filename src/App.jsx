@@ -225,7 +225,7 @@ function ModeBtn({ color, emoji, title, desc, onClick }) {
   const [h, setH] = useState(false);
   return (
     <button onClick={onClick} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-      style={{ background: h ? `${color}18` : C.surface, border: `1.5px solid ${h ? color : C.border}`, borderRadius: 16, padding: "20px 18px", cursor: "pointer", textAlign: "left", transition: "all 0.2s", boxShadow: h ? `0 0 24px ${color}33` : "none", display: "flex", gap: 14, alignItems: "flex-start", width: "100%" }}>
+      style={{ background: h ? `${color}22` : "#13203a", border: `2px solid ${h ? color : color+"99"}`, borderRadius: 16, padding: "20px 18px", cursor: "pointer", textAlign: "left", transition: "all 0.2s", boxShadow: h ? `0 0 28px ${color}55` : `0 0 8px ${color}22`, display: "flex", gap: 14, alignItems: "flex-start", width: "100%" }}>
       <span style={{ fontSize: 26 }}>{emoji}</span>
       <div>
         <p style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: "#ffffff" }}>{title}</p>
@@ -378,7 +378,7 @@ function MemberScreen({ roomId, onBack }) {
           <p style={{ color: C.mutedLight, fontSize: 13, margin: "0 0 4px" }}>{name} さんの空き時間</p>
           <p style={{ color: C.accent, fontWeight: 900, fontSize: 32, margin: 0 }}>{enabledCount}<span style={{ fontSize: 14, fontWeight: 400 }}>件</span></p>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 20, lineHeight: 1.7 }}>主催者がルーム画面を更新すると<br />あなたの空き時間が反映されます</p>
-          <NBtn color={C.muted} onClick={onBack} full style={{ marginTop: 20, background: C.surfaceHigh, boxShadow: "none" }}>トップに戻る</NBtn>
+          <NBtn color={C.muted} onClick={onBack} full style={{ marginTop: 20, background: "#e2e8f0", color: "#1a1a1a", boxShadow: "none", border: `2px solid ${C.border}` }}>トップに戻る</NBtn>
         </Card>
       )}
 
@@ -425,10 +425,11 @@ function MemberScreen({ roomId, onBack }) {
             </p>
             <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.text, lineHeight: 1.7, userSelect: "all", whiteSpace: "pre-wrap" }}>{prompt}</div>
             <button onClick={copyPrompt} style={{
-              width: "100%", padding: "12px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 800, transition: "all 0.2s", border: "2px solid",
-              background: copyState === "copied" ? `${C.green}22` : copyState === "error" ? `${C.accent2}22` : `${C.purple}22`,
+              width: "100%", padding: "13px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 800, transition: "all 0.2s", border: "2px solid",
+              background: copyState === "copied" ? "#e3faf0" : copyState === "error" ? "#fde8ea" : "#f0eafd",
               borderColor: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
-              color: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
+              color: copyState === "copied" ? "#0a4a30" : copyState === "error" ? "#7a1020" : "#3a1a7a",
+              boxShadow: `0 0 10px ${copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple}44`,
             }}>
               {copyState === "copied" ? "✓ コピーしました！" : copyState === "error" ? "⚠ 手動で長押しコピーしてください" : "📋 プロンプトをコピー"}
             </button>
@@ -479,11 +480,11 @@ function MemberScreen({ roomId, onBack }) {
             </p>
             <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: true })))}
-                style={{ flex: 1, padding: "7px", background: `${C.green}18`, border: `1px solid ${C.green}44`, borderRadius: 8, color: C.green, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                style={{ flex: 1, padding: "9px", background: "#e3faf0", border: `2px solid ${C.green}`, borderRadius: 8, color: "#0a4a30", cursor: "pointer", fontSize: 12, fontWeight: 800, boxShadow: `0 0 8px ${C.green}44` }}>
                 すべて選択
               </button>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: false })))}
-                style={{ flex: 1, padding: "7px", background: `${C.accent2}18`, border: `1px solid ${C.accent2}44`, borderRadius: 8, color: C.accent2, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                style={{ flex: 1, padding: "9px", background: "#fde8ea", border: `2px solid ${C.accent2}`, borderRadius: 8, color: "#7a1020", cursor: "pointer", fontSize: 12, fontWeight: 800, boxShadow: `0 0 8px ${C.accent2}44` }}>
                 すべて解除
               </button>
             </div>
@@ -503,7 +504,7 @@ function MemberScreen({ roomId, onBack }) {
             <input value={name} onChange={e => setName(e.target.value)} placeholder="名前" style={{ ...iSt, marginBottom: 4 }} />
           </Card>
           {error && <ErrBox msg={error} />}
-          <NBtn color={C.green} onClick={submit} loading={loading} full style={{ color: C.bg }}>
+          <NBtn color={C.green} onClick={submit} loading={loading} full>
             {loading ? "⏳ 送信中…" : `📤 ${enabledCount}件の空き時間を送信する`}
           </NBtn>
           <BackStep onClick={() => setStep(3)} />
@@ -630,13 +631,14 @@ function HostScreen({ roomId, onBack }) {
             const active = condExcludeDays.includes(i);
             return (
               <button key={i} onClick={() => toggleExcludeDay(i)} style={{
-                flex: 1, padding: "9px 0", borderRadius: 8, cursor: "pointer",
-                border: `1.5px solid ${active ? C.accent2 : C.border}`,
-                background: active ? `${C.accent2}22` : C.surfaceHigh,
-                color: active ? C.accent2 : i===0 ? C.accent2 : i===6 ? C.accent : C.mutedLight,
-                fontSize: 12, fontWeight: active ? 800 : 500,
+                flex: 1, padding: "10px 0", borderRadius: 8, cursor: "pointer",
+                border: `2px solid ${active ? C.accent2 : "#3a4a5c"}`,
+                background: active ? "#fde8ea" : "#1a2638",
+                color: active ? "#7a1020" : "#c8d4e0",
+                fontSize: 12, fontWeight: active ? 800 : 600,
                 textDecoration: active ? "line-through" : "none",
                 transition: "all 0.15s",
+                boxShadow: active ? `0 0 10px ${C.accent2}55` : "none",
               }}>{d}</button>
             );
           })}
@@ -656,7 +658,12 @@ function HostScreen({ roomId, onBack }) {
             <p style={{ margin: "0 0 2px", fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "1px" }}>Room ID</p>
             <p style={{ margin: 0, fontSize: 28, fontWeight: 900, color: C.gold, letterSpacing: "6px", fontFamily: "monospace" }}>{roomId}</p>
           </div>
-          <button onClick={copyShare} style={{ background: copied ? `${C.green}22` : `${C.gold}22`, border: `1px solid ${copied ? C.green : C.gold}`, borderRadius: 8, padding: "8px 14px", color: copied ? C.green : C.gold, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+          <button onClick={copyShare} style={{
+            background: copied ? "#e3faf0" : "#fdf3da",
+            border: `2px solid ${copied ? C.green : C.gold}`, borderRadius: 8, padding: "9px 16px",
+            color: copied ? "#0a4a30" : "#5a4500", cursor: "pointer", fontSize: 12, fontWeight: 800,
+            boxShadow: `0 0 10px ${copied ? C.green : C.gold}55`,
+          }}>
             {copied ? "✓ コピー済" : "📋 共有文をコピー"}
           </button>
         </div>
@@ -668,7 +675,11 @@ function HostScreen({ roomId, onBack }) {
           <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>
             送信済み <span style={{ color: C.accent, fontSize: 20, fontWeight: 900 }}>{subs.length}</span> 名
           </p>
-          <button onClick={refresh} style={{ background: `${C.accent}15`, border: `1px solid ${C.accent}44`, borderRadius: 8, padding: "6px 12px", color: C.accent, cursor: "pointer", fontSize: 12 }}>
+          <button onClick={refresh} style={{
+            background: "#eef4fb", border: `2px solid ${C.accent}`, borderRadius: 8, padding: "7px 14px",
+            color: "#0a1220", cursor: "pointer", fontSize: 12, fontWeight: 800,
+            boxShadow: `0 0 8px ${C.accent}44`,
+          }}>
             {loading ? "…" : "🔄 更新"}
           </button>
         </div>
@@ -689,7 +700,7 @@ function HostScreen({ roomId, onBack }) {
       </Card>
 
       {subs.length >= 2
-        ? <NBtn color={C.gold} onClick={compute} full style={{ marginBottom: 14, color: "#1a1000" }}>🔍 全員の共通空き時間を算出</NBtn>
+        ? <NBtn color={C.gold} onClick={compute} full style={{ marginBottom: 14 }}>🔍 全員の共通空き時間を算出</NBtn>
         : <p style={{ color: C.muted, fontSize: 12, textAlign: "center", marginBottom: 14 }}>2名以上の送信が必要です（現在 {subs.length}名）</p>
       }
 
@@ -735,10 +746,10 @@ function HostScreen({ roomId, onBack }) {
           <FieldLabel>説明・場所など（任意）</FieldLabel>
           <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="アジェンダ、場所、URLなど" rows={3} style={{ ...iSt, resize: "vertical", marginBottom: 14 }} />
           <a href={gcalLink} target="_blank" rel="noreferrer" style={{
-            display: "block", textAlign: "center", padding: "14px",
-            background: `${C.accent}22`, border: `1.5px solid ${C.accent}`,
-            borderRadius: 12, color: C.accent, textDecoration: "none", fontSize: 14, fontWeight: 700,
-            boxShadow: `0 0 16px ${C.accent}33`,
+            display: "block", textAlign: "center", padding: "15px",
+            background: "#eef4fb", border: `2px solid ${C.accent}`,
+            borderRadius: 12, color: "#0a1220", textDecoration: "none", fontSize: 14, fontWeight: 800,
+            boxShadow: `0 0 18px ${C.accent}66`,
           }}>
             📅 Googleカレンダーで予定を作成 →
           </a>
@@ -758,7 +769,12 @@ function Card({ children, style = {} }) {
 }
 function NBtn({ children, color, onClick, loading, full, style = {} }) {
   return (
-    <button onClick={onClick} disabled={loading} style={{ padding: "13px 20px", background: color, border: "none", borderRadius: 12, color: "#fff", cursor: loading ? "wait" : "pointer", fontSize: 14, fontWeight: 800, boxShadow: `0 0 18px ${color}55`, width: full ? "100%" : "auto", transition: "opacity 0.2s", ...style }}>
+    <button onClick={onClick} disabled={loading} style={{
+      padding: "13px 20px", background: "#f4f8ff", border: `2px solid ${color}`,
+      borderRadius: 12, color: "#0a1220", cursor: loading ? "wait" : "pointer",
+      fontSize: 14, fontWeight: 800, boxShadow: `0 0 20px ${color}66, 0 2px 8px rgba(0,0,0,0.3)`,
+      width: full ? "100%" : "auto", transition: "all 0.2s", ...style,
+    }}>
       {children}
     </button>
   );
@@ -766,20 +782,20 @@ function NBtn({ children, color, onClick, loading, full, style = {} }) {
 function BackBtn({ onClick }) {
   return (
     <button onClick={onClick} style={{
-      background: C.surfaceHigh, border: `1.5px solid ${C.accent}66`, color: C.accent,
+      background: "#eef4fb", border: `2px solid ${C.accent}`, color: "#0a1220",
       cursor: "pointer", fontSize: 13, fontWeight: 800, padding: "9px 16px",
       borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
-      transition: "all 0.2s", boxShadow: `0 0 8px ${C.accent}22`,
+      transition: "all 0.2s", boxShadow: `0 0 10px ${C.accent}55`,
     }}>← 戻る</button>
   );
 }
 function BackStep({ onClick }) {
   return (
     <button onClick={onClick} style={{
-      background: C.surfaceHigh, border: `1.5px solid ${C.accent}66`, color: C.accent,
+      background: "#eef4fb", border: `2px solid ${C.accent}`, color: "#0a1220",
       cursor: "pointer", fontSize: 12, fontWeight: 800, padding: "9px 16px",
       borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 6,
-      transition: "all 0.2s",
+      transition: "all 0.2s", boxShadow: `0 0 10px ${C.accent}55`,
     }}>← 前のステップへ</button>
   );
 }
@@ -794,7 +810,14 @@ function FieldLabel({ children }) {
 }
 function DurChip({ label, active, onClick }) {
   return (
-    <button onClick={onClick} style={{ padding: "7px 13px", borderRadius: 20, border: `1.5px solid ${active ? C.accent : C.border}`, background: active ? `${C.accent}22` : C.surfaceHigh, color: active ? C.accent : C.muted, cursor: "pointer", fontSize: 12, fontWeight: active ? 800 : 400, transition: "all 0.15s", boxShadow: active ? `0 0 10px ${C.accent}44` : "none" }}>
+    <button onClick={onClick} style={{
+      padding: "8px 14px", borderRadius: 20,
+      border: `2px solid ${active ? C.accent : "#3a4a5c"}`,
+      background: active ? "#eef4fb" : "#1a2638",
+      color: active ? "#0a1220" : "#c8d4e0",
+      cursor: "pointer", fontSize: 12, fontWeight: active ? 800 : 600,
+      transition: "all 0.15s", boxShadow: active ? `0 0 12px ${C.accent}66` : "none",
+    }}>
       {label}
     </button>
   );
@@ -854,10 +877,10 @@ function CalendarPicker({ value, onChange, label }) {
     <div style={{ position: "relative" }}>
       {label && <FieldLabel>{label}</FieldLabel>}
       <button onClick={() => setOpen(o => !o)} style={{
-        width: "100%", padding: "10px 12px", borderRadius: 8, textAlign: "left",
-        background: C.surfaceHigh, border: `1.5px solid ${open ? C.accent : C.border}`,
-        color: value ? C.text : C.muted, fontSize: 14, cursor: "pointer",
-        boxShadow: open ? `0 0 10px ${C.accent}44` : "none", transition: "all 0.2s",
+        width: "100%", padding: "11px 12px", borderRadius: 8, textAlign: "left",
+        background: C.surfaceHigh, border: `2px solid ${open ? C.accent : "#3a4a5c"}`,
+        color: value ? "#e8f4ff" : C.muted, fontSize: 14, cursor: "pointer", fontWeight: 600,
+        boxShadow: open ? `0 0 12px ${C.accent}55` : "none", transition: "all 0.2s",
       }}>
         📅 {displayVal}
       </button>
@@ -934,9 +957,10 @@ function CalendarPicker({ value, onChange, label }) {
 }
 
 const navBtnSt = {
-  background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6,
-  color: C.text, cursor: "pointer", fontSize: 18, width: 32, height: 32,
-  display: "flex", alignItems: "center", justifyContent: "center",
+  background: "#eef4fb", border: `2px solid ${C.accent}`, borderRadius: 6,
+  color: "#0a1220", cursor: "pointer", fontSize: 18, width: 34, height: 34,
+  display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800,
+  boxShadow: `0 0 6px ${C.accent}44`,
 };
 
 // ─── Day Timeline Grid（Googleカレンダー風の日別タイムライン）─────
