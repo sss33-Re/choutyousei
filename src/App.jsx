@@ -35,17 +35,14 @@ async function loadRoom(id) {
 }
 function genRoomId() { return Math.random().toString(36).slice(2, 8).toUpperCase(); }
 
-// ─── Slot computation（15分刻み・時間帯フィルタ付き）─────────────
+// ─── Slot computation（連続した空きブロックを算出）─────────────
+// 戻り値: 「durationMin以上、空いている連続区間」のリスト（重複スライドなし）
 function computeFreeSlots(events, startDate, endDate, durationMin, timeFrom, timeTo, excludeDays = []) {
-  // timeFrom/timeTo は "HH:MM" 形式（例 "09:00", "17:00"）、null なら制限なし
-  // excludeDays は曜日番号の配列（0=日, 1=月 ... 6=土）の除外リスト
-  const slots = [], dur = durationMin * 60 * 1000;
-  const step = 15 * 60 * 1000; // 15分刻み
+  const dur = durationMin * 60 * 1000;
+  const step = 15 * 60 * 1000; // 境界は15分単位に揃える
 
-  // 開始を15分単位に揃える
-  let cursor = new Date(startDate instanceof Date ? startDate : parseLocal(startDate));
-  cursor = new Date(Math.ceil(cursor.getTime() / step) * step);
-  const end = new Date(endDate instanceof Date ? endDate : parseLocal(endDate));
+  const rangeStart = new Date(startDate instanceof Date ? startDate : parseLocal(startDate));
+  const rangeEnd   = new Date(endDate   instanceof Date ? endDate   : parseLocal(endDate));
 
   const busy = events
     .map(e => ({ s: parseLocal(e.start), e: parseLocal(e.end) }))
@@ -54,48 +51,48 @@ function computeFreeSlots(events, startDate, endDate, durationMin, timeFrom, tim
   const [fromH, fromM] = timeFrom ? timeFrom.split(":").map(Number) : [0, 0];
   const [toH, toM]     = timeTo   ? timeTo.split(":").map(Number)   : [23, 59];
 
-  while (cursor < end) {
-    // 除外曜日チェック
-    if (excludeDays.includes(cursor.getDay())) {
-      const next = new Date(cursor);
-      next.setDate(next.getDate() + 1);
-      next.setHours(0, 0, 0, 0);
-      cursor = next;
-      continue;
+  // 日付ごとに「許可された時間帯（曜日・time-of-dayフィルタ後）」の区間リストを作る
+  const dayWindows = [];
+  let dayCursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate());
+  const lastDay = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate());
+  while (dayCursor <= lastDay) {
+    if (!excludeDays.includes(dayCursor.getDay())) {
+      const winStart = new Date(dayCursor); winStart.setHours(fromH, fromM, 0, 0);
+      const winEnd   = new Date(dayCursor); winEnd.setHours(toH, toM, 0, 0);
+      // 全体の範囲(rangeStart〜rangeEnd)でクリップ
+      const s = new Date(Math.max(+winStart, +rangeStart));
+      const e = new Date(Math.min(+winEnd, +rangeEnd));
+      if (s < e) dayWindows.push({ s, e });
     }
-
-    const slotEnd = new Date(cursor.getTime() + dur);
-    if (slotEnd > end) break;
-
-    // 時間帯フィルタ
-    const cH = cursor.getHours(), cM = cursor.getMinutes();
-    const eH = slotEnd.getHours(), eM = slotEnd.getMinutes();
-    const afterFrom = cH * 60 + cM >= fromH * 60 + fromM;
-    const beforeTo  = eH * 60 + eM <= toH  * 60 + toM;
-
-    if (timeFrom && timeTo && (!afterFrom || !beforeTo)) {
-      // 時間帯外 → 翌日のfromHへジャンプ
-      const next = new Date(cursor);
-      if (!afterFrom) {
-        next.setHours(fromH, fromM, 0, 0);
-      } else {
-        next.setDate(next.getDate() + 1);
-        next.setHours(fromH, fromM, 0, 0);
-      }
-      cursor = next;
-      continue;
-    }
-
-    const conflict = busy.find(b => b.s < slotEnd && b.e > cursor);
-    if (conflict) {
-      // 衝突した予定の終了時刻を15分単位に切り上げてジャンプ
-      cursor = new Date(Math.ceil(conflict.e.getTime() / step) * step);
-    } else {
-      slots.push({ start: new Date(cursor), end: slotEnd });
-      cursor = new Date(cursor.getTime() + step); // 15分ずつずらして次の候補へ
-    }
+    dayCursor = addDays(dayCursor, 1);
   }
-  return slots;
+
+  // 各日の許可区間からbusyを切り出して、残りの連続空き区間を求める
+  const freeBlocks = [];
+  for (const win of dayWindows) {
+    let segStart = new Date(win.s);
+    // この日の範囲に重なるbusyだけ抽出してソート
+    const dayBusy = busy.filter(b => b.s < win.e && b.e > win.s)
+      .map(b => ({ s: new Date(Math.max(+b.s, +win.s)), e: new Date(Math.min(+b.e, +win.e)) }))
+      .sort((a, b) => a.s - b.s);
+
+    for (const b of dayBusy) {
+      if (b.s > segStart) {
+        freeBlocks.push({ start: new Date(segStart), end: new Date(b.s) });
+      }
+      if (b.e > segStart) segStart = new Date(b.e);
+    }
+    if (segStart < win.e) freeBlocks.push({ start: new Date(segStart), end: new Date(win.e) });
+  }
+
+  // durationMin未満のブロックは除外し、境界を15分単位に丸める
+  return freeBlocks
+    .map(b => {
+      const s = new Date(Math.ceil(b.start.getTime() / step) * step);
+      const e = new Date(Math.floor(b.end.getTime() / step) * step);
+      return { start: s, end: e };
+    })
+    .filter(b => b.end - b.start >= dur);
 }
 
 function intersectSlots(allSlots) {
@@ -123,6 +120,19 @@ function parseScheduleText(text, startDate) {
   const year = parseLocal(startDate).getFullYear();
   const events = [];
   for (const line of text.split("\n").map(l => l.trim()).filter(Boolean)) {
+    // 終日予定パターン: "6/5（木）終日 タイトル" 等の表記ゆれに対応
+    const allDay = line.match(/(\d{1,2})[\/月]\s*(\d{1,2})\s*[日（\(]?\s*[月火水木金土日]?\s*[）\)]?\s*終日\s*(.*)/);
+    if (allDay) {
+      const [, month, day, title] = allDay;
+      events.push({
+        title: (title || "終日の予定").trim(),
+        start: localISO(year, Number(month), Number(day), 0, 0),
+        end:   localISO(year, Number(month), Number(day), 23, 59),
+        allDay: true,
+      });
+      continue;
+    }
+    // 通常パターン: "6/5（木）10:00〜11:00 タイトル"
     const m = line.match(/(\d{1,2})[\/月](\d{1,2})[日（\(]?[月火水木金土日]?[）\)]?\s*(\d{1,2}):(\d{2})[〜~\-–](\d{1,2}):(\d{2})\s*(.*)/);
     if (m) {
       const [, month, day, sh, sm, eh, em, title] = m;
@@ -137,7 +147,7 @@ function parseScheduleText(text, startDate) {
 }
 
 function makeCalendarPrompt(startDate, endDate) {
-  return `私のGoogleカレンダーの予定を${startDate}から${endDate}まで全て教えてください。\n\n必ず以下の形式で1行ずつ出力してください（この形式以外は使わないでください）：\n月/日（曜日）HH:MM〜HH:MM タイトル\n\n出力例：\n6/5（木）10:00〜11:00 チームMTG\n6/6（金）14:00〜15:00 クライアント面談\n\n予定がない場合は「予定なし」とだけ出力してください。表形式や箇条書きは使わないでください。`;
+  return `私のGoogleカレンダーの予定を${startDate}から${endDate}まで全て教えてください。\n\n必ず以下の形式で1行ずつ出力してください（この形式以外は使わないでください）：\n・時間が決まっている予定: 月/日（曜日）HH:MM〜HH:MM タイトル\n・終日の予定: 月/日（曜日）終日 タイトル\n\n出力例：\n6/5（木）10:00〜11:00 チームMTG\n6/6（金）終日 出張\n6/7（土）14:00〜15:00 クライアント面談\n\n予定がない場合は「予定なし」とだけ出力してください。表形式や箇条書きは使わないでください。`;
 }
 
 // ─── App ──────────────────────────────────────────────────────────
@@ -200,11 +210,12 @@ function TopScreen({ onCreate, onJoin, onManage }) {
         <ModeBtn color={C.accent} emoji="✨" title="ルームを作成する" desc="主催者として部屋を作り、参加者にIDを共有する" onClick={onCreate} />
         <ModeBtn color={C.gold}   emoji="🔑" title="ルームに参加する" desc="主催者から届いたルームIDを入力して参加する"    onClick={onJoin}  />
         <button onClick={onManage} style={{
-          background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.mutedLight,
-          cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 6,
-          padding: "10px 16px", borderRadius: 10, transition: "all 0.2s",
+          background: `${C.gold}14`, border: `1.5px solid ${C.gold}77`, color: "#ffffff",
+          cursor: "pointer", fontSize: 13, fontWeight: 800, marginTop: 6,
+          padding: "12px 16px", borderRadius: 12, transition: "all 0.2s",
+          boxShadow: `0 0 10px ${C.gold}22`,
         }}>
-          🔁 すでに作成したルームの主催者ビューに戻る
+          <span style={{ color: C.gold }}>🔁</span> すでに作成したルームの主催者ビューに戻る
         </button>
       </div>
     </div>
@@ -217,8 +228,8 @@ function ModeBtn({ color, emoji, title, desc, onClick }) {
       style={{ background: h ? `${color}18` : C.surface, border: `1.5px solid ${h ? color : C.border}`, borderRadius: 16, padding: "20px 18px", cursor: "pointer", textAlign: "left", transition: "all 0.2s", boxShadow: h ? `0 0 24px ${color}33` : "none", display: "flex", gap: 14, alignItems: "flex-start", width: "100%" }}>
       <span style={{ fontSize: 26 }}>{emoji}</span>
       <div>
-        <p style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: C.text }}>{title}</p>
-        <p style={{ margin: 0, fontSize: 12, color: C.mutedLight, lineHeight: 1.5 }}>{desc}</p>
+        <p style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: "#ffffff" }}>{title}</p>
+        <p style={{ margin: 0, fontSize: 12, color: "#b8c8d8", lineHeight: 1.5 }}>{desc}</p>
       </div>
     </button>
   );
@@ -682,28 +693,31 @@ function HostScreen({ roomId, onBack }) {
         : <p style={{ color: C.muted, fontSize: 12, textAlign: "center", marginBottom: 14 }}>2名以上の送信が必要です（現在 {subs.length}名）</p>
       }
 
-      {/* 共通スロット */}
+      {/* 共通スロット（カレンダーグリッド表示） */}
       {computed && (
         <Card style={{ marginBottom: 14 }}>
           <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: commonSlots.length > 0 ? C.green : C.accent2 }}>
             {commonSlots.length > 0 ? `✅ 共通の空き時間 ${commonSlots.length}件` : "❌ 共通の空き時間が見つかりませんでした"}
           </p>
           {commonSlots.length === 0 && <p style={{ color: C.muted, fontSize: 13 }}>期間を広げるか、参加者に再送信してもらいましょう。</p>}
-          <div style={{ maxHeight: 280, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-            {commonSlots.map((slot, i) => (
-              <div key={i} onClick={() => setSelected(slot)} style={{
-                padding: "12px 14px", borderRadius: 8, cursor: "pointer",
-                background: selected === slot ? `${C.gold}22` : C.bg,
-                border: `1.5px solid ${selected === slot ? C.gold : C.border}`,
-                display: "flex", justifyContent: "space-between", alignItems: "center",
-                transition: "all 0.15s", boxShadow: selected === slot ? `0 0 12px ${C.gold}33` : "none",
-              }}>
-                <span style={{ fontSize: 13, color: C.text }}>{fmtDate(slot.start)}</span>
-                <span style={{ fontSize: 13, color: C.mutedLight }}>{fmtTime(slot.start)} 〜 {fmtTime(slot.end)}</span>
-                {selected === slot && <span style={{ fontSize: 11, color: C.gold, fontWeight: 800 }}>✓</span>}
-              </div>
-            ))}
-          </div>
+          {commonSlots.length > 0 && (
+            <>
+              <p style={{ color: C.mutedLight, fontSize: 12, margin: "0 0 12px" }}>
+                <span style={{ color: C.green }}>■</span>候補日　<span style={{ color: C.gold }}>■</span>選択中
+              </p>
+              <DayTimelineGrid
+                freeSlots={commonSlots.map(s => ({ start: s.start, end: s.end }))}
+                busyEvents={[]}
+                startDate={condStart}
+                endDate={condEnd}
+                timeFrom={condTimeFrom}
+                timeTo={condTimeTo}
+                mode="select"
+                selectedSlot={selected ? { start: selected.start, end: selected.end } : null}
+                onSelectSlot={(slot) => setSelected(slot)}
+              />
+            </>
+          )}
         </Card>
       )}
 
@@ -752,19 +766,19 @@ function NBtn({ children, color, onClick, loading, full, style = {} }) {
 function BackBtn({ onClick }) {
   return (
     <button onClick={onClick} style={{
-      background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.mutedLight,
-      cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "8px 14px",
-      borderRadius: 8, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
-      transition: "all 0.2s",
+      background: C.surfaceHigh, border: `1.5px solid ${C.accent}66`, color: C.accent,
+      cursor: "pointer", fontSize: 13, fontWeight: 800, padding: "9px 16px",
+      borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
+      transition: "all 0.2s", boxShadow: `0 0 8px ${C.accent}22`,
     }}>← 戻る</button>
   );
 }
 function BackStep({ onClick }) {
   return (
     <button onClick={onClick} style={{
-      background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.mutedLight,
-      cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "8px 14px",
-      borderRadius: 8, display: "inline-flex", alignItems: "center", gap: 6,
+      background: C.surfaceHigh, border: `1.5px solid ${C.accent}66`, color: C.accent,
+      cursor: "pointer", fontSize: 12, fontWeight: 800, padding: "9px 16px",
+      borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 6,
       transition: "all 0.2s",
     }}>← 前のステップへ</button>
   );
@@ -928,7 +942,8 @@ const navBtnSt = {
 // ─── Day Timeline Grid（Googleカレンダー風の日別タイムライン）─────
 // freeSlots: 選択可能な空きスロット配列 {start, end, enabled}
 // busyEvents: 解析された予定 [{title, start, end}]（ISO文字列）
-function DayTimelineGrid({ freeSlots, busyEvents, startDate, endDate, timeFrom, timeTo, onToggleSlot }) {
+// mode: "toggle"（参加者・複数ON/OFF) | "select"（主催者・単一選択）
+function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeFrom, timeTo, onToggleSlot, mode = "toggle", selectedSlot, onSelectSlot }) {
   // 日付ごとにグループ化
   const start = parseLocal(startDate);
   const end = parseLocal(endDate);
@@ -989,14 +1004,14 @@ function DayTimelineGrid({ freeSlots, busyEvents, startDate, endDate, timeFrom, 
           const free = freeByDay[k] || [];
           const busy = busyByDay[k] || [];
           const label = `${d.getMonth()+1}/${d.getDate()}(${["日","月","火","水","木","金","土"][dow]})`;
-          const enabledHere = free.filter(s => s.enabled).length;
+          const enabledHere = mode === "select" ? free.length : free.filter(s => s.enabled).length;
 
           return (
             <div key={k} style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
               {/* 日付ラベル */}
               <div style={{ width: 70, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: dow===0 ? C.accent2 : dow===6 ? C.accent : C.text }}>{label}</span>
-                <span style={{ fontSize: 10, color: enabledHere ? C.green : C.muted }}>{enabledHere>0 ? `空${enabledHere}` : "空きなし"}</span>
+                <span style={{ fontSize: 10, color: enabledHere ? C.green : C.muted }}>{enabledHere>0 ? (mode==="select" ? `候補${enabledHere}` : `空${enabledHere}`) : "空きなし"}</span>
               </div>
 
               {/* タイムラインバー */}
@@ -1020,12 +1035,27 @@ function DayTimelineGrid({ freeSlots, busyEvents, startDate, endDate, timeFrom, 
                   );
                 })}
 
-                {/* free（空き）＝緑 or グレー（解除済み） */}
+                {/* free（空き）＝緑（toggleモード）/ ゴールド選択（selectモード） */}
                 {free.map((s) => {
                   const sd = s.start instanceof Date ? s.start : parseLocal(s.start);
                   const ed = s.end instanceof Date ? s.end : parseLocal(s.end);
                   const left = pctOf(sd), right = pctOf(ed);
                   if (right <= left) return null;
+
+                  if (mode === "select") {
+                    const isSel = selectedSlot && +parseLocal(selectedSlot.start) === +sd && +parseLocal(selectedSlot.end) === +ed;
+                    return (
+                      <div key={s.idx} onClick={() => onSelectSlot?.({ start: sd, end: ed })} title={`${fmtTime(sd)}〜${fmtTime(ed)}`} style={{
+                        position: "absolute", left: `${left}%`, width: `${Math.max(right-left,0.6)}%`, top: 2, bottom: 2,
+                        background: isSel ? C.gold : `${C.green}99`,
+                        border: isSel ? `1.5px solid ${C.gold}` : `1px solid ${C.green}`,
+                        borderRadius: 3, cursor: "pointer", transition: "all 0.15s",
+                        boxShadow: isSel ? `0 0 8px ${C.gold}aa` : `0 0 4px ${C.green}66`,
+                        zIndex: isSel ? 2 : 1,
+                      }} />
+                    );
+                  }
+
                   return (
                     <div key={s.idx} onClick={() => onToggleSlot(s.idx)} title={`${fmtTime(sd)}〜${fmtTime(ed)}`} style={{
                       position: "absolute", left: `${left}%`, width: `${Math.max(right-left,0.6)}%`, top: 2, bottom: 2,
