@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 
 const C = {
-  bg: "#040d1c", surface: "#080f1e", surfaceHigh: "#0d1a30",
-  border: "#2a4a6e", accent: "#00e5ff", accent2: "#ff4d6d",
-  gold: "#ffd166", green: "#06ffa5", purple: "#b48eff",
-  text: "#e8f4ff", muted: "#4a7fa3", mutedLight: "#7aa8c8",
+  bg: "#040d1c", surface: "#0a1626", surfaceHigh: "#13243c",
+  border: "#3a5a7e", accent: "#00e5ff", accent2: "#ff6b85",
+  gold: "#ffd166", green: "#06ffa5", purple: "#c4a4ff",
+  text: "#ffffff", muted: "#9ab4cc", mutedLight: "#c8dcec",
 };
 
 // ─── Utilities ────────────────────────────────────────────────────
@@ -34,6 +34,45 @@ async function loadRoom(id) {
   try { const r = localStorage.getItem(KEY(id)); return r ? JSON.parse(r) : null; } catch { return null; }
 }
 function genRoomId() { return Math.random().toString(36).slice(2, 8).toUpperCase(); }
+
+// ─── 主催ルーム履歴 ────────────────────────────────────────────
+// ルーム名(roomName)はルームデータ本体（共有ストレージ）に保存するので、
+// どの端末から開いても同じ名前が見える。
+// 「自分が過去にアクセスしたルームID一覧」だけは端末ローカルに保持。
+const HISTORY_KEY = "schedsync_host_history";
+function loadLocalRoomIds() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
+}
+function saveLocalRoomIds(list) {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch {}
+}
+function rememberRoomId(roomId) {
+  const list = loadLocalRoomIds().filter(id => id !== roomId);
+  list.unshift(roomId);
+  saveLocalRoomIds(list.slice(0, 20));
+}
+function forgetRoomId(roomId) {
+  saveLocalRoomIds(loadLocalRoomIds().filter(id => id !== roomId));
+}
+// 共有ストレージ上のルーム名を更新
+async function renameRoom(roomId, roomName) {
+  const data = await loadRoom(roomId);
+  if (!data) return false;
+  data.roomName = roomName;
+  await saveRoom(roomId, data);
+  return true;
+}
+// ローカルに覚えているID一覧 → 各ルームの最新データ（名前など）を取得して履歴表示用に整形
+async function buildRoomHistory() {
+  const ids = loadLocalRoomIds();
+  const items = [];
+  for (const id of ids) {
+    const data = await loadRoom(id);
+    if (data) items.push({ roomId: id, roomName: data.roomName || "" });
+    else forgetRoomId(id); // 削除済みルームは履歴からも消す
+  }
+  return items;
+}
 
 // ─── Slot computation（連続した空きブロックを算出）─────────────
 // 戻り値: 「durationMin以上、空いている連続区間」のリスト（重複スライドなし）
@@ -162,7 +201,8 @@ export default function App() {
       {screen === "top" && <TopScreen
         onCreate={async () => {
           const id = genRoomId();
-          await saveRoom(id, { id, submissions: [], createdAt: new Date().toISOString() });
+          await saveRoom(id, { id, roomName: "", submissions: [], createdAt: new Date().toISOString() });
+          rememberRoomId(id);
           setRoomId(id); setScreen("host");
         }}
         onJoin={() => setScreen("join")}
@@ -183,10 +223,12 @@ export default function App() {
         title="👑 主催者として再開" color={C.accent} buttonLabel="このルームを開く →"
         value={manageInput} onChange={setManageInput}
         onBack={() => setScreen("top")}
-        onJoin={async () => {
-          const id = manageInput.trim().toUpperCase();
+        showHistory
+        onJoin={async (overrideId) => {
+          const id = (overrideId || manageInput).trim().toUpperCase();
           const data = await loadRoom(id);
           if (!data) { alert("ルームが見つかりません。IDを確認してください。"); return; }
+          rememberRoomId(id);
           setRoomId(id); setScreen("host");
         }}
       />}
@@ -205,13 +247,13 @@ function TopScreen({ onCreate, onJoin, onManage }) {
       <h1 style={{ margin: "0 0 6px", fontSize: 30, fontWeight: 900, letterSpacing: "-2px", fontFamily: "monospace" }}>
         <span style={{ color: C.accent }}>SCHED</span><span style={{ color: C.text }}>SYNC</span>
       </h1>
-      <p style={{ margin: "0 0 40px", color: C.muted, fontSize: 13 }}>予定テキスト貼り付け → 全員の空き時間を自動算出</p>
+      <p style={{ margin: "0 0 40px", color: C.muted, fontSize: 14 }}>予定テキスト貼り付け → 全員の空き時間を自動算出</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <ModeBtn color={C.accent} emoji="✨" title="ルームを作成する" desc="主催者として部屋を作り、参加者にIDを共有する" onClick={onCreate} />
         <ModeBtn color={C.gold}   emoji="🔑" title="ルームに参加する" desc="主催者から届いたルームIDを入力して参加する"    onClick={onJoin}  />
         <button onClick={onManage} style={{
           background: `${C.gold}14`, border: `1.5px solid ${C.gold}77`, color: "#ffffff",
-          cursor: "pointer", fontSize: 13, fontWeight: 800, marginTop: 6,
+          cursor: "pointer", fontSize: 14, fontWeight: 800, marginTop: 6,
           padding: "12px 16px", borderRadius: 12, transition: "all 0.2s",
           boxShadow: `0 0 10px ${C.gold}22`,
         }}>
@@ -228,25 +270,106 @@ function ModeBtn({ color, emoji, title, desc, onClick }) {
       style={{ background: h ? `${color}22` : "#13203a", border: `2px solid ${h ? color : color+"99"}`, borderRadius: 16, padding: "20px 18px", cursor: "pointer", textAlign: "left", transition: "all 0.2s", boxShadow: h ? `0 0 28px ${color}55` : `0 0 8px ${color}22`, display: "flex", gap: 14, alignItems: "flex-start", width: "100%" }}>
       <span style={{ fontSize: 26 }}>{emoji}</span>
       <div>
-        <p style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: "#ffffff" }}>{title}</p>
-        <p style={{ margin: 0, fontSize: 12, color: "#b8c8d8", lineHeight: 1.5 }}>{desc}</p>
+        <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#ffffff" }}>{title}</p>
+        <p style={{ margin: 0, fontSize: 13, color: "#b8c8d8", lineHeight: 1.5 }}>{desc}</p>
       </div>
     </button>
   );
 }
 
 // ─── JOIN / MANAGE（共通コンポーネント）────────────────────────────
-function JoinScreen({ value, onChange, onJoin, onBack, title = "🔑 ルームに参加", color = C.gold, buttonLabel = "参加する →" }) {
+function JoinScreen({ value, onChange, onJoin, onBack, title = "🔑 ルームに参加", color = C.gold, buttonLabel = "参加する →", showHistory = false }) {
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(showHistory);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const refreshHistory = useCallback(async () => {
+    if (!showHistory) return;
+    setHistoryLoading(true);
+    const items = await buildRoomHistory();
+    setHistory(items);
+    setHistoryLoading(false);
+  }, [showHistory]);
+
+  useEffect(() => { refreshHistory(); }, [refreshHistory]);
+
+  const startEdit = (r) => { setEditingId(r.roomId); setEditName(r.roomName || ""); };
+  const saveEdit = async () => {
+    setSavingEdit(true);
+    await renameRoom(editingId, editName.trim());
+    setEditingId(null);
+    setSavingEdit(false);
+    refreshHistory();
+  };
+  const deleteEntry = (roomId) => {
+    forgetRoomId(roomId);
+    setHistory(h => h.filter(r => r.roomId !== roomId));
+  };
+
   return (
-    <div style={{ maxWidth: 420, margin: "0 auto", padding: "24px 20px" }}>
+    <div style={{ maxWidth: 440, margin: "0 auto", padding: "24px 20px" }}>
       <BackBtn onClick={onBack} />
       <SecTitle color={color}>{title}</SecTitle>
       <Card>
         <FieldLabel>ルームID（6文字）</FieldLabel>
         <input value={value} onChange={e => onChange(e.target.value.toUpperCase())} placeholder="例：AB12CD" maxLength={6}
-          style={{ ...iSt, textAlign: "center", fontSize: 24, letterSpacing: "8px", fontWeight: 900, marginBottom: 14 }} />
-        <NBtn color={color} onClick={onJoin} full>{buttonLabel}</NBtn>
+          style={{ ...iSt, textAlign: "center", fontSize: 28, letterSpacing: "10px", fontWeight: 900, color: "#ffffff", marginBottom: 14 }} />
+        <NBtn color={color} onClick={() => onJoin()} full>{buttonLabel}</NBtn>
       </Card>
+
+      {showHistory && (
+        <div style={{ marginTop: 20 }}>
+          <p style={{ fontSize: 14, fontWeight: 800, color: "#e8f4ff", marginBottom: 10 }}>📂 これまでのルーム履歴</p>
+          {historyLoading ? (
+            <p style={{ color: "#9aa8ba", fontSize: 14, textAlign: "center", padding: "16px 0" }}>読み込み中…</p>
+          ) : history.length === 0 ? (
+            <p style={{ color: "#9aa8ba", fontSize: 14, textAlign: "center", padding: "16px 0" }}>まだ履歴がありません</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {history.map(r => (
+                <div key={r.roomId} style={{
+                  background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "12px 14px",
+                }}>
+                  {editingId === r.roomId ? (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="ルームの名前（例：6月の飲み会）"
+                        autoFocus
+                        style={{ ...iSt, flex: 1, fontSize: 14, color: "#ffffff" }} />
+                      <button onClick={saveEdit} disabled={savingEdit} style={{
+                        background: "#e3faf0", border: `2px solid ${C.green}`, borderRadius: 8,
+                        color: "#0a4a30", fontWeight: 800, fontSize: 13, padding: "8px 12px", cursor: savingEdit ? "wait" : "pointer",
+                      }}>{savingEdit ? "…" : "✓ 保存"}</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ flex: 1, cursor: "pointer" }} onClick={() => onJoin(r.roomId)}>
+                        <p style={{ margin: "0 0 3px", fontSize: 15, fontWeight: 800, color: "#ffffff" }}>
+                          {r.roomName || "（名前未設定）"}
+                        </p>
+                        <p style={{ margin: 0, fontSize: 14, fontFamily: "monospace", fontWeight: 700, color: color, letterSpacing: "2px" }}>
+                          {r.roomId}
+                        </p>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => startEdit(r)} style={{
+                          background: "#eef4fb", border: `2px solid ${C.accent}`, borderRadius: 8,
+                          color: "#0a1220", fontWeight: 800, fontSize: 12, padding: "7px 10px", cursor: "pointer",
+                        }}>✏️ 名前</button>
+                        <button onClick={() => deleteEntry(r.roomId)} style={{
+                          background: "#fde8ea", border: `2px solid ${C.accent2}`, borderRadius: 8,
+                          color: "#7a1020", fontWeight: 800, fontSize: 12, padding: "7px 10px", cursor: "pointer",
+                        }}>🗑</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -347,16 +470,47 @@ function MemberScreen({ roomId, onBack }) {
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", padding: "24px 20px" }}>
       <BackBtn onClick={onBack} />
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
         <SecTitle color={C.accent}>👤 空き時間を送信</SecTitle>
         <RoomBadge id={roomId} />
       </div>
+      {roomData?.roomName && (
+        <p style={{ color: "#c8d4e0", fontSize: 14, fontWeight: 700, margin: "0 0 16px" }}>📌 {roomData.roomName}</p>
+      )}
+
+      <button onClick={() => loadRoom(roomId).then(d => d && setRoomData(d))} style={{
+        background: "#eef4fb", border: `2px solid ${C.accent}`, borderRadius: 8, padding: "7px 14px",
+        color: "#0a1220", cursor: "pointer", fontSize: 12, fontWeight: 800, marginBottom: 14,
+        boxShadow: `0 0 8px ${C.accent}44`,
+      }}>
+        🔄 確定情報を更新する
+      </button>
+
+      {/* 確定済みの予定があれば表示 */}
+      {roomData?.finalizedEvent && (
+        <Card style={{ borderColor: C.green, marginBottom: 18, background: "#0a1f18" }}>
+          <p style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 900, color: "#5dffc0" }}>✅ 予定が確定しました！</p>
+          <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#ffffff" }}>{roomData.finalizedEvent.title}</p>
+          <p style={{ margin: "0 0 14px", fontSize: 14, color: "#c8d4e0" }}>
+            {fmtDate(roomData.finalizedEvent.start)} {fmtTime(roomData.finalizedEvent.start)} 〜 {fmtTime(roomData.finalizedEvent.end)}
+          </p>
+          <a href={makeGCalLink(roomData.finalizedEvent.title, parseLocal(roomData.finalizedEvent.start), parseLocal(roomData.finalizedEvent.end), roomData.finalizedEvent.desc || "")}
+            target="_blank" rel="noreferrer" style={{
+              display: "block", textAlign: "center", padding: "13px",
+              background: "#eef4fb", border: `2px solid ${C.green}`,
+              borderRadius: 12, color: "#0a1220", textDecoration: "none", fontSize: 14, fontWeight: 800,
+              boxShadow: `0 0 16px ${C.green}66`,
+            }}>
+            📅 自分のGoogleカレンダーに追加 →
+          </a>
+        </Card>
+      )}
 
       {/* Step indicator */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 24 }}>
         {[1,2,3,4].map((s, i) => (
           <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800,
+            <div style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800,
               background: step > s ? C.green : step === s ? C.accent : C.surfaceHigh,
               color: step >= s ? C.bg : C.muted,
               border: `2px solid ${step > s ? C.green : step === s ? C.accent : C.border}`,
@@ -365,7 +519,7 @@ function MemberScreen({ roomId, onBack }) {
             {i < 3 && <div style={{ width: 18, height: 2, background: step > s ? C.green : C.border, borderRadius: 1 }} />}
           </div>
         ))}
-        <span style={{ color: C.mutedLight, fontSize: 11, marginLeft: 8 }}>
+        <span style={{ color: C.mutedLight, fontSize: 12, marginLeft: 8 }}>
           {["設定", "Claudeへ", "貼り付け", "編集・送信"][Math.min(step,4)-1]}
         </span>
       </div>
@@ -374,10 +528,10 @@ function MemberScreen({ roomId, onBack }) {
       {step === 5 && (
         <Card style={{ textAlign: "center", padding: "40px 20px" }}>
           <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
-          <p style={{ fontSize: 20, fontWeight: 900, color: C.green, margin: "0 0 8px" }}>送信完了！</p>
-          <p style={{ color: C.mutedLight, fontSize: 13, margin: "0 0 4px" }}>{name} さんの空き時間</p>
-          <p style={{ color: C.accent, fontWeight: 900, fontSize: 32, margin: 0 }}>{enabledCount}<span style={{ fontSize: 14, fontWeight: 400 }}>件</span></p>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 20, lineHeight: 1.7 }}>主催者がルーム画面を更新すると<br />あなたの空き時間が反映されます</p>
+          <p style={{ fontSize: 21, fontWeight: 900, color: C.green, margin: "0 0 8px" }}>送信完了！</p>
+          <p style={{ color: C.mutedLight, fontSize: 14, margin: "0 0 4px" }}>{name} さんの空き時間</p>
+          <p style={{ color: C.accent, fontWeight: 900, fontSize: 32, margin: 0 }}>{enabledCount}<span style={{ fontSize: 15, fontWeight: 400 }}>件</span></p>
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 20, lineHeight: 1.7 }}>主催者がルーム画面を更新すると<br />あなたの空き時間が反映されます</p>
           <NBtn color={C.muted} onClick={onBack} full style={{ marginTop: 20, background: "#e2e8f0", color: "#1a1a1a", boxShadow: "none", border: `2px solid ${C.border}` }}>トップに戻る</NBtn>
         </Card>
       )}
@@ -387,8 +541,8 @@ function MemberScreen({ roomId, onBack }) {
         <Card>
           {hasConditions && (
             <div style={{ background: `${C.gold}11`, border: `1px solid ${C.gold}44`, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-              <p style={{ margin: "0 0 4px", fontSize: 11, color: C.gold, fontWeight: 700 }}>👑 主催者の設定条件</p>
-              <p style={{ margin: 0, fontSize: 12, color: C.mutedLight, lineHeight: 1.6 }}>
+              <p style={{ margin: "0 0 4px", fontSize: 12, color: C.gold, fontWeight: 700 }}>👑 主催者の設定条件</p>
+              <p style={{ margin: 0, fontSize: 13, color: C.mutedLight, lineHeight: 1.6 }}>
                 {roomData.startDate && `期間: ${fmtDate(roomData.startDate)} 〜 ${fmtDate(roomData.endDate)}`}
                 {roomData.timeFrom && `　時間帯: ${roomData.timeFrom} 〜 ${roomData.timeTo}`}
                 {roomData.excludeDays?.length > 0 && `　対象外: ${roomData.excludeDays.map(d => ["日","月","火","水","木","金","土"][d]).join("・")}曜`}
@@ -407,7 +561,7 @@ function MemberScreen({ roomId, onBack }) {
           </div>
           {(timeFrom || timeTo) && (
             <div style={{ background: `${C.accent}11`, border: `1px solid ${C.accent}33`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>
-              <p style={{ margin: 0, fontSize: 12, color: C.accent }}>🕐 時間帯フィルタ：{timeFrom} 〜 {timeTo} の枠のみ算出</p>
+              <p style={{ margin: 0, fontSize: 13, color: C.accent }}>🕐 時間帯フィルタ：{timeFrom} 〜 {timeTo} の枠のみ算出</p>
             </div>
           )}
           {error && <ErrBox msg={error} />}
@@ -419,13 +573,13 @@ function MemberScreen({ roomId, onBack }) {
       {step === 2 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card style={{ borderColor: `${C.purple}55` }}>
-            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: C.purple }}>📋 Claudeのチャットで予定を取得する</p>
-            <p style={{ color: C.mutedLight, fontSize: 13, lineHeight: 1.7, margin: "0 0 14px" }}>
+            <p style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 800, color: C.purple }}>📋 Claudeのチャットで予定を取得する</p>
+            <p style={{ color: C.mutedLight, fontSize: 14, lineHeight: 1.7, margin: "0 0 14px" }}>
               下のプロンプトをコピーして、<strong style={{ color: C.text }}>Claudeのチャット画面</strong>に貼り付けてください。
             </p>
-            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginBottom: 12, fontSize: 13, color: C.text, lineHeight: 1.7, userSelect: "all", whiteSpace: "pre-wrap" }}>{prompt}</div>
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginBottom: 12, fontSize: 14, color: C.text, lineHeight: 1.7, userSelect: "all", whiteSpace: "pre-wrap" }}>{prompt}</div>
             <button onClick={copyPrompt} style={{
-              width: "100%", padding: "13px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 800, transition: "all 0.2s", border: "2px solid",
+              width: "100%", padding: "13px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontWeight: 800, transition: "all 0.2s", border: "2px solid",
               background: copyState === "copied" ? "#e3faf0" : copyState === "error" ? "#fde8ea" : "#f0eafd",
               borderColor: copyState === "copied" ? C.green : copyState === "error" ? C.accent2 : C.purple,
               color: copyState === "copied" ? "#0a4a30" : copyState === "error" ? "#7a1020" : "#3a1a7a",
@@ -435,11 +589,11 @@ function MemberScreen({ roomId, onBack }) {
             </button>
           </Card>
           <Card>
-            <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: C.gold }}>手順</p>
+            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700, color: C.gold }}>手順</p>
             {["Claudeのチャット画面を新しく開く", "プロンプトを貼り付けて送信", "Claudeが返した予定一覧をコピー", "このアプリに戻って「次へ」を押す"].map((t, i) => (
               <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
-                <span style={{ color: C.gold, fontWeight: 900, fontSize: 13, minWidth: 16 }}>{i+1}</span>
-                <span style={{ color: C.mutedLight, fontSize: 13, lineHeight: 1.5 }}>{t}</span>
+                <span style={{ color: C.gold, fontWeight: 900, fontSize: 14, minWidth: 16 }}>{i+1}</span>
+                <span style={{ color: C.mutedLight, fontSize: 14, lineHeight: 1.5 }}>{t}</span>
               </div>
             ))}
           </Card>
@@ -452,13 +606,13 @@ function MemberScreen({ roomId, onBack }) {
       {step === 3 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card>
-            <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: C.accent }}>📝 Claudeの返答を貼り付け</p>
-            <p style={{ color: C.mutedLight, fontSize: 13, margin: "0 0 12px", lineHeight: 1.6 }}>
+            <p style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 800, color: C.accent }}>📝 Claudeの返答を貼り付け</p>
+            <p style={{ color: C.mutedLight, fontSize: 14, margin: "0 0 12px", lineHeight: 1.6 }}>
               ClaudeがGoogleカレンダーの予定を返答したテキストをそのまま貼り付けてください。
             </p>
             <textarea value={pastedText} onChange={e => setPastedText(e.target.value)}
               placeholder={"例：\n6/5（木）10:00〜11:00 チームMTG\n6/6（金）14:00〜15:00 クライアント面談"}
-              rows={10} style={{ ...iSt, resize: "vertical", fontFamily: "monospace", fontSize: 12, lineHeight: 1.6 }} />
+              rows={10} style={{ ...iSt, resize: "vertical", fontFamily: "monospace", fontSize: 13, lineHeight: 1.6 }} />
             {error && <ErrBox msg={error} />}
           </Card>
           <NBtn color={C.accent} onClick={analyze} full>🔍 空き時間を自動算出</NBtn>
@@ -471,20 +625,20 @@ function MemberScreen({ roomId, onBack }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: C.green }}>✅ 空き時間を確認・編集</p>
-              <span style={{ color: C.accent, fontWeight: 900, fontSize: 16 }}>{enabledCount}<span style={{ fontSize: 11, color: C.mutedLight, fontWeight: 400 }}>/{freeSlots.length}件</span></span>
+              <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: C.green }}>✅ 空き時間を確認・編集</p>
+              <span style={{ color: C.accent, fontWeight: 900, fontSize: 17 }}>{enabledCount}<span style={{ fontSize: 12, color: C.mutedLight, fontWeight: 400 }}>/{freeSlots.length}件</span></span>
             </div>
-            <p style={{ color: "#c8d4e0", fontSize: 12, fontWeight: 600, margin: "0 0 14px", lineHeight: 1.6 }}>
+            <p style={{ color: "#c8d4e0", fontSize: 13, fontWeight: 600, margin: "0 0 14px", lineHeight: 1.6 }}>
               <span style={{ color: "#5dffc0" }}>■</span>空き（タップで送信対象から外せます）　
               <span style={{ color: "#8a96a8" }}>■</span>予定あり／対象外
             </p>
             <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: true })))}
-                style={{ flex: 1, padding: "9px", background: "#e3faf0", border: `2px solid ${C.green}`, borderRadius: 8, color: "#0a4a30", cursor: "pointer", fontSize: 12, fontWeight: 800, boxShadow: `0 0 8px ${C.green}44` }}>
+                style={{ flex: 1, padding: "9px", background: "#e3faf0", border: `2px solid ${C.green}`, borderRadius: 8, color: "#0a4a30", cursor: "pointer", fontSize: 13, fontWeight: 800, boxShadow: `0 0 8px ${C.green}44` }}>
                 すべて選択
               </button>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: false })))}
-                style={{ flex: 1, padding: "9px", background: "#fde8ea", border: `2px solid ${C.accent2}`, borderRadius: 8, color: "#7a1020", cursor: "pointer", fontSize: 12, fontWeight: 800, boxShadow: `0 0 8px ${C.accent2}44` }}>
+                style={{ flex: 1, padding: "9px", background: "#fde8ea", border: `2px solid ${C.accent2}`, borderRadius: 8, color: "#7a1020", cursor: "pointer", fontSize: 13, fontWeight: 800, boxShadow: `0 0 8px ${C.accent2}44` }}>
                 すべて解除
               </button>
             </div>
@@ -526,6 +680,10 @@ function HostScreen({ roomId, onBack }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [copied, setCopied] = useState(false);
+  const [roomName, setRoomName] = useState("");
+  const [roomNameSaving, setRoomNameSaving] = useState(false);
+  const [roomNameSaved, setRoomNameSaved] = useState(false);
+  const [finalizedSaved, setFinalizedSaved] = useState(false);
 
   // 候補日を選んだ時、その枠の時刻で時刻編集欄を初期化
   const selectSlot = (slot) => {
@@ -577,6 +735,7 @@ function HostScreen({ roomId, onBack }) {
     if (data?.timeTo)     setCondTimeTo(data.timeTo);
     if (data?.excludeDays) setCondExcludeDays(data.excludeDays);
     if (data?.startDate)  setCondSaved(true);
+    setRoomName(data?.roomName || "");
     setLoading(false);
   }, [roomId]);
 
@@ -584,6 +743,14 @@ function HostScreen({ roomId, onBack }) {
 
   const toggleExcludeDay = (d) => {
     setCondExcludeDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  };
+
+  const saveRoomName = async () => {
+    setRoomNameSaving(true);
+    await renameRoom(roomId, roomName.trim());
+    setRoomNameSaving(false);
+    setRoomNameSaved(true);
+    setTimeout(() => setRoomNameSaved(false), 2000);
   };
 
   const saveConditions = async () => {
@@ -630,6 +797,24 @@ function HostScreen({ roomId, onBack }) {
   };
 
   const gcalLink = editedRange ? makeGCalLink(title || "ミーティング", editedRange.start, editedRange.end, desc) : null;
+
+  // 確定した予定をルームデータに保存（参加者にも見えるようにする）
+  const finalizeEvent = async () => {
+    if (!editedRange || editedRange.end <= editedRange.start) return;
+    const data = await loadRoom(roomId);
+    if (!data) return;
+    data.finalizedEvent = {
+      title: title || "ミーティング",
+      desc,
+      start: fmt(editedRange.start),
+      end: fmt(editedRange.end),
+      decidedAt: new Date().toISOString(),
+    };
+    await saveRoom(roomId, data);
+    setRoom(data);
+    setFinalizedSaved(true);
+    setTimeout(() => setFinalizedSaved(false), 3000);
+  };
   const subs = room?.submissions || [];
 
   return (
@@ -640,9 +825,26 @@ function HostScreen({ roomId, onBack }) {
         <RoomBadge id={roomId} />
       </div>
 
+      {/* ルーム名 */}
+      <Card style={{ borderColor: `${C.gold}44`, marginBottom: 14 }}>
+        <FieldLabel>ルーム名（参加者にも表示されます）</FieldLabel>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={roomName} onChange={e => setRoomName(e.target.value)} placeholder="例：6月の飲み会、Aチーム定例MTG"
+            style={{ ...iSt, flex: 1, color: "#ffffff" }} />
+          <button onClick={saveRoomName} disabled={roomNameSaving} style={{
+            background: roomNameSaved ? "#e3faf0" : "#fdf3da",
+            border: `2px solid ${roomNameSaved ? C.green : C.gold}`, borderRadius: 8, padding: "0 16px",
+            color: roomNameSaved ? "#0a4a30" : "#5a4500", cursor: roomNameSaving ? "wait" : "pointer",
+            fontWeight: 800, fontSize: 13, whiteSpace: "nowrap",
+          }}>
+            {roomNameSaved ? "✓ 保存済" : roomNameSaving ? "…" : "保存"}
+          </button>
+        </div>
+      </Card>
+
       {/* 条件設定 */}
       <Card style={{ borderColor: `${C.accent}44`, marginBottom: 14 }}>
-        <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 800, color: C.accent }}>⚙️ 募集条件を設定する</p>
+        <p style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 800, color: C.accent }}>⚙️ 募集条件を設定する</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
           <CalendarPicker label="開始日時" value={condStart} onChange={setCondStart} />
           <CalendarPicker label="終了日時" value={condEnd} onChange={setCondEnd} />
@@ -667,7 +869,7 @@ function HostScreen({ roomId, onBack }) {
                 border: `2px solid ${active ? C.accent2 : "#3a4a5c"}`,
                 background: active ? "#fde8ea" : "#1a2638",
                 color: active ? "#7a1020" : "#c8d4e0",
-                fontSize: 12, fontWeight: active ? 800 : 600,
+                fontSize: 13, fontWeight: active ? 800 : 600,
                 textDecoration: active ? "line-through" : "none",
                 transition: "all 0.15s",
                 boxShadow: active ? `0 0 10px ${C.accent2}55` : "none",
@@ -675,25 +877,25 @@ function HostScreen({ roomId, onBack }) {
             );
           })}
         </div>
-        <p style={{ color: C.muted, fontSize: 11, margin: "6px 0 14px" }}>タップした曜日は候補から除外されます</p>
+        <p style={{ color: C.muted, fontSize: 12, margin: "6px 0 14px" }}>タップした曜日は候補から除外されます</p>
         <NBtn color={C.accent} onClick={saveConditions} full>
           💾 条件を保存して参加者に反映
         </NBtn>
-        {condSaved && <p style={{ color: C.green, fontSize: 12, textAlign: "center", marginTop: 8 }}>✓ 保存済み・参加者の画面に反映されます</p>}
+        {condSaved && <p style={{ color: C.green, fontSize: 13, textAlign: "center", marginTop: 8 }}>✓ 保存済み・参加者の画面に反映されます</p>}
       </Card>
 
       {/* 共有 */}
       <Card style={{ borderColor: `${C.gold}44`, marginBottom: 14 }}>
-        <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 800, color: C.gold }}>📤 参加者に共有する</p>
+        <p style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: C.gold }}>📤 参加者に共有する</p>
         <div style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <p style={{ margin: "0 0 2px", fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "1px" }}>Room ID</p>
+            <p style={{ margin: "0 0 2px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "1px" }}>Room ID</p>
             <p style={{ margin: 0, fontSize: 28, fontWeight: 900, color: C.gold, letterSpacing: "6px", fontFamily: "monospace" }}>{roomId}</p>
           </div>
           <button onClick={copyShare} style={{
             background: copied ? "#e3faf0" : "#fdf3da",
             border: `2px solid ${copied ? C.green : C.gold}`, borderRadius: 8, padding: "9px 16px",
-            color: copied ? "#0a4a30" : "#5a4500", cursor: "pointer", fontSize: 12, fontWeight: 800,
+            color: copied ? "#0a4a30" : "#5a4500", cursor: "pointer", fontSize: 13, fontWeight: 800,
             boxShadow: `0 0 10px ${copied ? C.green : C.gold}55`,
           }}>
             {copied ? "✓ コピー済" : "📋 共有文をコピー"}
@@ -704,27 +906,27 @@ function HostScreen({ roomId, onBack }) {
       {/* 送信済み一覧 */}
       <Card style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>
-            送信済み <span style={{ color: C.accent, fontSize: 20, fontWeight: 900 }}>{subs.length}</span> 名
+          <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: C.text }}>
+            送信済み <span style={{ color: C.accent, fontSize: 21, fontWeight: 900 }}>{subs.length}</span> 名
           </p>
           <button onClick={refresh} style={{
             background: "#eef4fb", border: `2px solid ${C.accent}`, borderRadius: 8, padding: "7px 14px",
-            color: "#0a1220", cursor: "pointer", fontSize: 12, fontWeight: 800,
+            color: "#0a1220", cursor: "pointer", fontSize: 13, fontWeight: 800,
             boxShadow: `0 0 8px ${C.accent}44`,
           }}>
             {loading ? "…" : "🔄 更新"}
           </button>
         </div>
         {subs.length === 0
-          ? <p style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>まだ誰も送信していません</p>
+          ? <p style={{ color: C.muted, fontSize: 14, textAlign: "center", padding: "20px 0" }}>まだ誰も送信していません</p>
           : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {subs.map((s, i) => (
                 <div key={i} style={{ background: C.bg, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>{s.name}</p>
-                    <p style={{ margin: 0, fontSize: 11, color: C.muted }}>空き時間 {s.slots.length}件</p>
+                    <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: C.text }}>{s.name}</p>
+                    <p style={{ margin: 0, fontSize: 12, color: C.muted }}>空き時間 {s.slots.length}件</p>
                   </div>
-                  <span style={{ color: C.green, fontSize: 12, fontWeight: 600 }}>✓ 送信済み</span>
+                  <span style={{ color: C.green, fontSize: 13, fontWeight: 600 }}>✓ 送信済み</span>
                 </div>
               ))}
             </div>
@@ -733,19 +935,19 @@ function HostScreen({ roomId, onBack }) {
 
       {subs.length >= 2
         ? <NBtn color={C.gold} onClick={compute} full style={{ marginBottom: 14 }}>🔍 全員の共通空き時間を算出</NBtn>
-        : <p style={{ color: C.muted, fontSize: 12, textAlign: "center", marginBottom: 14 }}>2名以上の送信が必要です（現在 {subs.length}名）</p>
+        : <p style={{ color: C.muted, fontSize: 13, textAlign: "center", marginBottom: 14 }}>2名以上の送信が必要です（現在 {subs.length}名）</p>
       }
 
       {/* 共通スロット（カレンダーグリッド表示） */}
       {computed && (
         <Card style={{ marginBottom: 14 }}>
-          <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: commonSlots.length > 0 ? C.green : C.accent2 }}>
+          <p style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: commonSlots.length > 0 ? C.green : C.accent2 }}>
             {commonSlots.length > 0 ? `✅ 共通の空き時間 ${commonSlots.length}件` : "❌ 共通の空き時間が見つかりませんでした"}
           </p>
-          {commonSlots.length === 0 && <p style={{ color: C.muted, fontSize: 13 }}>期間を広げるか、参加者に再送信してもらいましょう。</p>}
+          {commonSlots.length === 0 && <p style={{ color: C.muted, fontSize: 14 }}>期間を広げるか、参加者に再送信してもらいましょう。</p>}
           {commonSlots.length > 0 && (
             <>
-              <p style={{ color: "#c8d4e0", fontSize: 12, fontWeight: 600, margin: "0 0 12px" }}>
+              <p style={{ color: "#c8d4e0", fontSize: 13, fontWeight: 600, margin: "0 0 12px" }}>
                 <span style={{ color: "#5dffc0" }}>■</span>候補日　<span style={{ color: "#ffd166" }}>■</span>選択中
               </p>
               <DayTimelineGrid
@@ -767,9 +969,9 @@ function HostScreen({ roomId, onBack }) {
       {/* 予定作成 */}
       {selected && (
         <Card style={{ borderColor: `${C.accent}44` }}>
-          <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: C.accent }}>📝 予定を作成</p>
+          <p style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: C.accent }}>📝 予定を作成</p>
           <div style={{ background: `${C.accent}11`, border: `1px solid ${C.accent}33`, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-            <p style={{ margin: 0, fontSize: 13, color: C.accent, fontWeight: 700 }}>
+            <p style={{ margin: 0, fontSize: 14, color: C.accent, fontWeight: 700 }}>
               候補日: {fmtDate(selected.start)}（空き時間 {fmtTime(selected.start)} 〜 {fmtTime(selected.end)}）
             </p>
           </div>
@@ -792,17 +994,25 @@ function HostScreen({ roomId, onBack }) {
           <input value={title} onChange={e => setTitle(e.target.value)} placeholder="例：チームミーティング" style={{ ...iSt, marginBottom: 12 }} />
           <FieldLabel>説明・場所など（任意）</FieldLabel>
           <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="アジェンダ、場所、URLなど" rows={3} style={{ ...iSt, resize: "vertical", marginBottom: 14 }} />
-          <a href={gcalLink} target="_blank" rel="noreferrer" style={{
-            display: "block", textAlign: "center", padding: "15px",
-            background: "#eef4fb", border: `2px solid ${C.accent}`,
-            borderRadius: 12, color: "#0a1220", textDecoration: "none", fontSize: 14, fontWeight: 800,
-            boxShadow: `0 0 18px ${C.accent}66`,
-            pointerEvents: (editedRange && editedRange.end <= editedRange.start) ? "none" : "auto",
-            opacity: (editedRange && editedRange.end <= editedRange.start) ? 0.5 : 1,
-          }}>
+          <a href={gcalLink} target="_blank" rel="noreferrer"
+            onClick={() => finalizeEvent()}
+            style={{
+              display: "block", textAlign: "center", padding: "15px",
+              background: "#eef4fb", border: `2px solid ${C.accent}`,
+              borderRadius: 12, color: "#0a1220", textDecoration: "none", fontSize: 15, fontWeight: 800,
+              boxShadow: `0 0 18px ${C.accent}66`,
+              pointerEvents: (editedRange && editedRange.end <= editedRange.start) ? "none" : "auto",
+              opacity: (editedRange && editedRange.end <= editedRange.start) ? 0.5 : 1,
+            }}>
             📅 Googleカレンダーで予定を作成 →
           </a>
-          <p style={{ color: C.muted, fontSize: 11, textAlign: "center", marginTop: 8 }}>リンクを開くとGoogleカレンダーの予定作成画面が開きます</p>
+          <p style={{ color: C.muted, fontSize: 12, textAlign: "center", marginTop: 8 }}>
+            リンクを開くとGoogleカレンダーの予定作成画面が開きます。<br />
+            同時に確定情報が参加者にも共有され、参加者側でも予定を追加できるようになります。
+          </p>
+          {finalizedSaved && (
+            <p style={{ color: "#5dffc0", fontSize: 13, fontWeight: 700, textAlign: "center", marginTop: 6 }}>✓ 確定情報を参加者に共有しました</p>
+          )}
         </Card>
       )}
     </div>
@@ -821,7 +1031,7 @@ function NBtn({ children, color, onClick, loading, full, style = {} }) {
     <button onClick={onClick} disabled={loading} style={{
       padding: "13px 20px", background: "#f4f8ff", border: `2px solid ${color}`,
       borderRadius: 12, color: "#0a1220", cursor: loading ? "wait" : "pointer",
-      fontSize: 14, fontWeight: 800, boxShadow: `0 0 20px ${color}66, 0 2px 8px rgba(0,0,0,0.3)`,
+      fontSize: 15, fontWeight: 800, boxShadow: `0 0 20px ${color}66, 0 2px 8px rgba(0,0,0,0.3)`,
       width: full ? "100%" : "auto", transition: "all 0.2s", ...style,
     }}>
       {children}
@@ -832,7 +1042,7 @@ function BackBtn({ onClick }) {
   return (
     <button onClick={onClick} style={{
       background: "#eef4fb", border: `2px solid ${C.accent}`, color: "#0a1220",
-      cursor: "pointer", fontSize: 13, fontWeight: 800, padding: "9px 16px",
+      cursor: "pointer", fontSize: 14, fontWeight: 800, padding: "9px 16px",
       borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
       transition: "all 0.2s", boxShadow: `0 0 10px ${C.accent}55`,
     }}>← 戻る</button>
@@ -842,20 +1052,20 @@ function BackStep({ onClick }) {
   return (
     <button onClick={onClick} style={{
       background: "#eef4fb", border: `2px solid ${C.accent}`, color: "#0a1220",
-      cursor: "pointer", fontSize: 12, fontWeight: 800, padding: "9px 16px",
+      cursor: "pointer", fontSize: 13, fontWeight: 800, padding: "9px 16px",
       borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 6,
       transition: "all 0.2s", boxShadow: `0 0 10px ${C.accent}55`,
     }}>← 前のステップへ</button>
   );
 }
 function SecTitle({ children, color }) {
-  return <h2 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: C.text, borderLeft: `3px solid ${color}`, paddingLeft: 10, fontFamily: "monospace" }}>{children}</h2>;
+  return <h2 style={{ margin: 0, fontSize: 21, fontWeight: 900, color: "#ffffff", borderLeft: `4px solid ${color}`, paddingLeft: 10, fontFamily: "monospace" }}>{children}</h2>;
 }
 function RoomBadge({ id }) {
-  return <span style={{ background: `${C.gold}18`, border: `1px solid ${C.gold}55`, borderRadius: 6, padding: "3px 8px", fontSize: 12, color: C.gold, fontFamily: "monospace", fontWeight: 900, letterSpacing: "2px" }}>{id}</span>;
+  return <span style={{ background: `${C.gold}22`, border: `2px solid ${C.gold}`, borderRadius: 7, padding: "4px 10px", fontSize: 14, color: "#ffffff", fontFamily: "monospace", fontWeight: 900, letterSpacing: "2px" }}>{id}</span>;
 }
 function FieldLabel({ children }) {
-  return <label style={{ display: "block", fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>{children}</label>;
+  return <label style={{ display: "block", fontSize: 12, color: "#b8c8d8", marginBottom: 6, fontWeight: 800, textTransform: "uppercase", letterSpacing: "1px" }}>{children}</label>;
 }
 function DurChip({ label, active, onClick }) {
   return (
@@ -864,7 +1074,7 @@ function DurChip({ label, active, onClick }) {
       border: `2px solid ${active ? C.accent : "#3a4a5c"}`,
       background: active ? "#eef4fb" : "#1a2638",
       color: active ? "#0a1220" : "#c8d4e0",
-      cursor: "pointer", fontSize: 12, fontWeight: active ? 800 : 600,
+      cursor: "pointer", fontSize: 13, fontWeight: active ? 800 : 600,
       transition: "all 0.15s", boxShadow: active ? `0 0 12px ${C.accent}66` : "none",
     }}>
       {label}
@@ -872,9 +1082,9 @@ function DurChip({ label, active, onClick }) {
   );
 }
 function ErrBox({ msg }) {
-  return <div style={{ background: `${C.accent2}15`, border: `1px solid ${C.accent2}55`, borderRadius: 8, padding: "10px 14px", color: C.accent2, fontSize: 12, marginTop: 10 }}>⚠ {msg}</div>;
+  return <div style={{ background: `${C.accent2}15`, border: `1px solid ${C.accent2}55`, borderRadius: 8, padding: "10px 14px", color: C.accent2, fontSize: 13, marginTop: 10 }}>⚠ {msg}</div>;
 }
-const iSt = { width: "100%", padding: "10px 12px", borderRadius: 8, background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.text, fontSize: 14, outline: "none", boxSizing: "border-box" };
+const iSt = { width: "100%", padding: "10px 12px", borderRadius: 8, background: C.surfaceHigh, border: `1.5px solid ${C.border}`, color: C.text, fontSize: 15, outline: "none", boxSizing: "border-box" };
 function GlobalStyle() {
   return <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600;700;900&display=swap');
@@ -928,7 +1138,7 @@ function CalendarPicker({ value, onChange, label }) {
       <button onClick={() => setOpen(o => !o)} style={{
         width: "100%", padding: "11px 12px", borderRadius: 8, textAlign: "left",
         background: C.surfaceHigh, border: `2px solid ${open ? C.accent : "#3a4a5c"}`,
-        color: value ? "#e8f4ff" : C.muted, fontSize: 14, cursor: "pointer", fontWeight: 600,
+        color: value ? "#e8f4ff" : C.muted, fontSize: 15, cursor: "pointer", fontWeight: 600,
         boxShadow: open ? `0 0 12px ${C.accent}55` : "none", transition: "all 0.2s",
       }}>
         📅 {displayVal}
@@ -944,7 +1154,7 @@ function CalendarPicker({ value, onChange, label }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <button onClick={() => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y=>y-1); } else setViewMonth(m=>m-1); }}
               style={navBtnSt}>‹</button>
-            <span style={{ color: C.text, fontWeight: 800, fontSize: 14 }}>{viewYear}年 {MONTHS[viewMonth]}</span>
+            <span style={{ color: C.text, fontWeight: 800, fontSize: 15 }}>{viewYear}年 {MONTHS[viewMonth]}</span>
             <button onClick={() => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y=>y+1); } else setViewMonth(m=>m+1); }}
               style={navBtnSt}>›</button>
           </div>
@@ -952,7 +1162,7 @@ function CalendarPicker({ value, onChange, label }) {
           {/* Day headers */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 4 }}>
             {DAYS.map((d,i) => (
-              <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: i===0?C.accent2:i===6?C.accent:C.muted, padding: "2px 0" }}>{d}</div>
+              <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: i===0?C.accent2:i===6?C.accent:C.muted, padding: "2px 0" }}>{d}</div>
             ))}
           </div>
 
@@ -969,7 +1179,7 @@ function CalendarPicker({ value, onChange, label }) {
                   padding: "6px 2px", borderRadius: 6, border: isSelected ? `1.5px solid ${C.gold}` : "1.5px solid transparent",
                   background: isSelected ? `${C.gold}33` : isToday ? `${C.accent}15` : "transparent",
                   color: isSelected ? C.gold : dow===0 ? C.accent2 : dow===6 ? C.accent : C.text,
-                  cursor: "pointer", fontSize: 12, fontWeight: isSelected ? 800 : 400,
+                  cursor: "pointer", fontSize: 13, fontWeight: isSelected ? 800 : 400,
                   boxShadow: isSelected ? `0 0 8px ${C.gold}44` : "none",
                 }}>
                   {d}
@@ -980,7 +1190,7 @@ function CalendarPicker({ value, onChange, label }) {
 
           {/* Time picker */}
           <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-            <p style={{ margin: "0 0 8px", fontSize: 10, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>時刻</p>
+            <p style={{ margin: "0 0 8px", fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>時刻</p>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <select value={selHour} onChange={e => { const h = Number(e.target.value); setSelHour(h); applyTime(h, selMin); }}
                 style={{ ...iSt, flex: 1, padding: "8px" }}>
@@ -997,7 +1207,7 @@ function CalendarPicker({ value, onChange, label }) {
           <button onClick={() => setOpen(false)} style={{
             width: "100%", marginTop: 12, padding: "10px", borderRadius: 8,
             background: C.accent, border: "none", color: C.bg,
-            fontWeight: 800, cursor: "pointer", fontSize: 13,
+            fontWeight: 800, cursor: "pointer", fontSize: 14,
           }}>✓ 決定</button>
         </div>
       )}
@@ -1007,7 +1217,7 @@ function CalendarPicker({ value, onChange, label }) {
 
 const navBtnSt = {
   background: "#eef4fb", border: `2px solid ${C.accent}`, borderRadius: 6,
-  color: "#0a1220", cursor: "pointer", fontSize: 18, width: 34, height: 34,
+  color: "#0a1220", cursor: "pointer", fontSize: 19, width: 34, height: 34,
   display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800,
   boxShadow: `0 0 6px ${C.accent}44`,
 };
@@ -1061,7 +1271,7 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
   return (
     <div>
       {/* 時刻目盛り */}
-      <div style={{ display: "flex", fontSize: 11, color: "#b8c8d8", fontWeight: 700, marginBottom: 6, paddingLeft: 78 }}>
+      <div style={{ display: "flex", fontSize: 12, color: "#b8c8d8", fontWeight: 700, marginBottom: 6, paddingLeft: 78 }}>
         {hourRange.filter((_, i) => i % 3 === 0).map(h => (
           <div key={h} style={{ flex: 3, textAlign: "left" }}>{h}時</div>
         ))}
@@ -1069,7 +1279,7 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" }}>
         {daysWithData.length === 0 && (
-          <p style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>該当する日程がありません</p>
+          <p style={{ color: C.muted, fontSize: 14, textAlign: "center", padding: "20px 0" }}>該当する日程がありません</p>
         )}
         {daysWithData.map(d => {
           const k = dayKey(d);
@@ -1084,8 +1294,8 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
             <div key={k} style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
               {/* 日付ラベル */}
               <div style={{ width: 70, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                <span style={{ fontSize: 13, fontWeight: 800, color: dowColor }}>{label}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: enabledHere ? "#5dffc0" : "#8a96a8" }}>{enabledHere>0 ? (mode==="select" ? `候補${enabledHere}` : `空${enabledHere}`) : "空きなし"}</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: dowColor }}>{label}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: enabledHere ? "#5dffc0" : "#8a96a8" }}>{enabledHere>0 ? (mode==="select" ? `候補${enabledHere}` : `空${enabledHere}`) : "空きなし"}</span>
               </div>
 
               {/* タイムラインバー */}
@@ -1146,7 +1356,7 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
         })}
       </div>
 
-      <p style={{ color: "#9aa8ba", fontSize: 11, fontWeight: 600, marginTop: 10, textAlign: "center" }}>
+      <p style={{ color: "#9aa8ba", fontSize: 12, fontWeight: 600, marginTop: 10, textAlign: "center" }}>
         バーをタップで空き時間の選択 / 解除ができます
       </p>
     </div>
