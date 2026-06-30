@@ -474,9 +474,9 @@ function MemberScreen({ roomId, onBack }) {
               <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: C.green }}>✅ 空き時間を確認・編集</p>
               <span style={{ color: C.accent, fontWeight: 900, fontSize: 16 }}>{enabledCount}<span style={{ fontSize: 11, color: C.mutedLight, fontWeight: 400 }}>/{freeSlots.length}件</span></span>
             </div>
-            <p style={{ color: C.mutedLight, fontSize: 12, margin: "0 0 14px", lineHeight: 1.6 }}>
-              <span style={{ color: C.green }}>■</span>空き（タップで送信対象から外せます）　
-              <span style={{ color: C.muted }}>■</span>予定あり／対象外
+            <p style={{ color: "#c8d4e0", fontSize: 12, fontWeight: 600, margin: "0 0 14px", lineHeight: 1.6 }}>
+              <span style={{ color: "#5dffc0" }}>■</span>空き（タップで送信対象から外せます）　
+              <span style={{ color: "#8a96a8" }}>■</span>予定あり／対象外
             </p>
             <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
               <button onClick={() => setFreeSlots(p => p.map(s => ({ ...s, enabled: true })))}
@@ -521,9 +521,41 @@ function HostScreen({ roomId, onBack }) {
   const [commonSlots, setCommonSlots] = useState([]);
   const [computed, setComputed] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [editStartTime, setEditStartTime] = useState(""); // "HH:MM"
+  const [editEndTime,   setEditEndTime]   = useState(""); // "HH:MM"
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [copied, setCopied] = useState(false);
+
+  // 候補日を選んだ時、その枠の時刻で時刻編集欄を初期化
+  const selectSlot = (slot) => {
+    setSelected(slot);
+    setEditStartTime(`${pad(slot.start.getHours())}:${pad(slot.start.getMinutes())}`);
+    setEditEndTime(`${pad(slot.end.getHours())}:${pad(slot.end.getMinutes())}`);
+  };
+
+  // 編集後の実際の開始・終了Date（同じ日付のまま時刻だけ変える）
+  const editedRange = (() => {
+    if (!selected || !editStartTime || !editEndTime) return null;
+    const base = selected.start;
+    const [sh, sm] = editStartTime.split(":").map(Number);
+    const [eh, em] = editEndTime.split(":").map(Number);
+    const s = new Date(base.getFullYear(), base.getMonth(), base.getDate(), sh, sm);
+    const e = new Date(base.getFullYear(), base.getMonth(), base.getDate(), eh, em);
+    return { start: s, end: e };
+  })();
+
+  // 15分刻みの時刻選択肢（候補ブロックの範囲内のみ）
+  const timeOptionsFor = (slot) => {
+    if (!slot) return [];
+    const opts = [];
+    let t = new Date(slot.start);
+    while (t <= slot.end) {
+      opts.push(`${pad(t.getHours())}:${pad(t.getMinutes())}`);
+      t = new Date(t.getTime() + 15 * 60 * 1000);
+    }
+    return opts;
+  };
 
   // 主催者が設定する条件
   const [condStart,    setCondStart]    = useState(() => todayStr());
@@ -597,7 +629,7 @@ function HostScreen({ roomId, onBack }) {
     setCopied(true); setTimeout(() => setCopied(false), 2500);
   };
 
-  const gcalLink = selected ? makeGCalLink(title || "ミーティング", selected.start, selected.end, desc) : null;
+  const gcalLink = editedRange ? makeGCalLink(title || "ミーティング", editedRange.start, editedRange.end, desc) : null;
   const subs = room?.submissions || [];
 
   return (
@@ -713,8 +745,8 @@ function HostScreen({ roomId, onBack }) {
           {commonSlots.length === 0 && <p style={{ color: C.muted, fontSize: 13 }}>期間を広げるか、参加者に再送信してもらいましょう。</p>}
           {commonSlots.length > 0 && (
             <>
-              <p style={{ color: C.mutedLight, fontSize: 12, margin: "0 0 12px" }}>
-                <span style={{ color: C.green }}>■</span>候補日　<span style={{ color: C.gold }}>■</span>選択中
+              <p style={{ color: "#c8d4e0", fontSize: 12, fontWeight: 600, margin: "0 0 12px" }}>
+                <span style={{ color: "#5dffc0" }}>■</span>候補日　<span style={{ color: "#ffd166" }}>■</span>選択中
               </p>
               <DayTimelineGrid
                 freeSlots={commonSlots.map(s => ({ start: s.start, end: s.end }))}
@@ -725,7 +757,7 @@ function HostScreen({ roomId, onBack }) {
                 timeTo={condTimeTo}
                 mode="select"
                 selectedSlot={selected ? { start: selected.start, end: selected.end } : null}
-                onSelectSlot={(slot) => setSelected(slot)}
+                onSelectSlot={selectSlot}
               />
             </>
           )}
@@ -737,10 +769,25 @@ function HostScreen({ roomId, onBack }) {
         <Card style={{ borderColor: `${C.accent}44` }}>
           <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: C.accent }}>📝 予定を作成</p>
           <div style={{ background: `${C.accent}11`, border: `1px solid ${C.accent}33`, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-            <p style={{ margin: 0, fontSize: 13, color: C.accent, fontWeight: 600 }}>
-              {fmtDate(selected.start)} {fmtTime(selected.start)} 〜 {fmtTime(selected.end)}
+            <p style={{ margin: 0, fontSize: 13, color: C.accent, fontWeight: 700 }}>
+              候補日: {fmtDate(selected.start)}（空き時間 {fmtTime(selected.start)} 〜 {fmtTime(selected.end)}）
             </p>
           </div>
+
+          <FieldLabel>予定の時間を編集（候補日の空き範囲内で調整できます）</FieldLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 14 }}>
+            <select value={editStartTime} onChange={e => setEditStartTime(e.target.value)} style={iSt}>
+              {timeOptionsFor(selected).slice(0, -1).map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <span style={{ color: "#c8d4e0", textAlign: "center", fontWeight: 700 }}>〜</span>
+            <select value={editEndTime} onChange={e => setEditEndTime(e.target.value)} style={iSt}>
+              {timeOptionsFor(selected).slice(1).map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          {editedRange && editedRange.end <= editedRange.start && (
+            <ErrBox msg="終了時刻は開始時刻より後にしてください" />
+          )}
+
           <FieldLabel>イベントタイトル</FieldLabel>
           <input value={title} onChange={e => setTitle(e.target.value)} placeholder="例：チームミーティング" style={{ ...iSt, marginBottom: 12 }} />
           <FieldLabel>説明・場所など（任意）</FieldLabel>
@@ -750,6 +797,8 @@ function HostScreen({ roomId, onBack }) {
             background: "#eef4fb", border: `2px solid ${C.accent}`,
             borderRadius: 12, color: "#0a1220", textDecoration: "none", fontSize: 14, fontWeight: 800,
             boxShadow: `0 0 18px ${C.accent}66`,
+            pointerEvents: (editedRange && editedRange.end <= editedRange.start) ? "none" : "auto",
+            opacity: (editedRange && editedRange.end <= editedRange.start) ? 0.5 : 1,
           }}>
             📅 Googleカレンダーで予定を作成 →
           </a>
@@ -1012,7 +1061,7 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
   return (
     <div>
       {/* 時刻目盛り */}
-      <div style={{ display: "flex", fontSize: 9, color: C.muted, marginBottom: 4, paddingLeft: 78 }}>
+      <div style={{ display: "flex", fontSize: 11, color: "#b8c8d8", fontWeight: 700, marginBottom: 6, paddingLeft: 78 }}>
         {hourRange.filter((_, i) => i % 3 === 0).map(h => (
           <div key={h} style={{ flex: 3, textAlign: "left" }}>{h}時</div>
         ))}
@@ -1029,13 +1078,14 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
           const busy = busyByDay[k] || [];
           const label = `${d.getMonth()+1}/${d.getDate()}(${["日","月","火","水","木","金","土"][dow]})`;
           const enabledHere = mode === "select" ? free.length : free.filter(s => s.enabled).length;
+          const dowColor = dow===0 ? "#ff8a9a" : dow===6 ? "#7adfff" : "#e8f4ff";
 
           return (
             <div key={k} style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
               {/* 日付ラベル */}
               <div style={{ width: 70, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: dow===0 ? C.accent2 : dow===6 ? C.accent : C.text }}>{label}</span>
-                <span style={{ fontSize: 10, color: enabledHere ? C.green : C.muted }}>{enabledHere>0 ? (mode==="select" ? `候補${enabledHere}` : `空${enabledHere}`) : "空きなし"}</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: dowColor }}>{label}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: enabledHere ? "#5dffc0" : "#8a96a8" }}>{enabledHere>0 ? (mode==="select" ? `候補${enabledHere}` : `空${enabledHere}`) : "空きなし"}</span>
               </div>
 
               {/* タイムラインバー */}
@@ -1054,7 +1104,7 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
                       position: "absolute", left: `${left}%`, width: `${right-left}%`, top: 2, bottom: 2,
                       background: "#3a3f4a", borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
                     }}>
-                      <span style={{ fontSize: 8, color: "#8a8f9a", whiteSpace: "nowrap", padding: "0 2px" }}>{b.title}</span>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: "#c0c8d4", whiteSpace: "nowrap", padding: "0 2px" }}>{b.title}</span>
                     </div>
                   );
                 })}
@@ -1096,7 +1146,7 @@ function DayTimelineGrid({ freeSlots, busyEvents = [], startDate, endDate, timeF
         })}
       </div>
 
-      <p style={{ color: C.muted, fontSize: 10, marginTop: 10, textAlign: "center" }}>
+      <p style={{ color: "#9aa8ba", fontSize: 11, fontWeight: 600, marginTop: 10, textAlign: "center" }}>
         バーをタップで空き時間の選択 / 解除ができます
       </p>
     </div>
